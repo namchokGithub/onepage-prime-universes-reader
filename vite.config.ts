@@ -409,6 +409,7 @@ function editorSavePlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: "/onepage-prime-universes-reader/",
   plugins: [react(), editorSavePlugin()],
   resolve: {
     alias: {
