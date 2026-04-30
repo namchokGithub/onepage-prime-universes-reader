@@ -1,0 +1,22 @@
+{
+  "volumes": [
+    {
+      "id": "vol-1",
+      "title": "Volume 1",
+      "arcs": [
+        {
+          "id": "arc-1",
+          "title": "Arc 1",
+          "chapters": [
+            {
+              "title": "Chapter 1",
+              "vol": "vol-1",
+              "arc": "arc-1",
+              "chapter": "chapter-1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

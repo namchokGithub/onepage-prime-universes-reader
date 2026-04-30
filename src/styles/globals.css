@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-Italic.ttf") format("truetype");
+    font-weight: 400;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-Medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-MediumItalic.ttf") format("truetype");
+    font-weight: 500;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-SemiBold.ttf") format("truetype");
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-SemiBoldItalic.ttf") format("truetype");
+    font-weight: 600;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Google Sans";
+    src: url("/fonts/GoogleSans-BoldItalic.ttf") format("truetype");
+    font-weight: 700;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  :root {
+    --background: 45 35% 98%;
+    --foreground: 24 12% 12%;
+    --card: 45 30% 99%;
+    --card-foreground: 24 12% 12%;
+    --popover: 45 30% 99%;
+    --popover-foreground: 24 12% 12%;
+    --primary: 160 20% 20%;
+    --primary-foreground: 45 35% 98%;
+    --secondary: 42 22% 91%;
+    --secondary-foreground: 24 12% 18%;
+    --muted: 42 18% 92%;
+    --muted-foreground: 24 8% 42%;
+    --accent: 170 18% 90%;
+    --accent-foreground: 160 20% 18%;
+    --destructive: 0 70% 42%;
+    --destructive-foreground: 45 35% 98%;
+    --border: 38 16% 84%;
+    --input: 38 16% 84%;
+    --ring: 160 25% 35%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 24 12% 10%;
+    --foreground: 42 24% 90%;
+    --card: 24 12% 13%;
+    --card-foreground: 42 24% 90%;
+    --popover: 24 12% 13%;
+    --popover-foreground: 42 24% 90%;
+    --primary: 156 28% 76%;
+    --primary-foreground: 24 12% 10%;
+    --secondary: 24 10% 20%;
+    --secondary-foreground: 42 24% 90%;
+    --muted: 24 10% 18%;
+    --muted-foreground: 38 12% 66%;
+    --accent: 156 14% 22%;
+    --accent-foreground: 42 24% 90%;
+    --destructive: 0 62% 48%;
+    --destructive-foreground: 42 24% 90%;
+    --border: 24 10% 24%;
+    --input: 24 10% 24%;
+    --ring: 156 28% 70%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Google Sans", "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
