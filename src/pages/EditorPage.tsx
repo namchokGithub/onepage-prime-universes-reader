@@ -71,6 +71,8 @@ const IntlWithSegmenter = Intl as typeof Intl & {
   ) => IntlWordSegmenter;
 };
 
+const CAN_SAVE_HOSTED_CHAPTER = import.meta.env.DEV;
+
 function countWords(text: string) {
   const trimmedText = text.trim();
 
@@ -237,6 +239,18 @@ export function EditorPage() {
       }
 
       if (vol && arc && chapter) {
+        if (!CAN_SAVE_HOSTED_CHAPTER) {
+          setBackups(saveBackup(fileKey, value));
+          savedValueRef.current = value;
+          setLoadError(null);
+          setSaveNotice({
+            type: "success",
+            message:
+              "Saved a browser backup. Use Download to export the Markdown file.",
+          });
+          return true;
+        }
+
         const response = await fetch("/__editor/save-chapter", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -370,7 +384,9 @@ export function EditorPage() {
               title={
                 hasWritableFile
                   ? "Save changes to the opened file"
-                  : "Save changes to the current chapter"
+                  : CAN_SAVE_HOSTED_CHAPTER
+                    ? "Save changes to the current chapter"
+                    : "Save a browser backup"
               }>
               <Save className="h-4 w-4" />
               Save
