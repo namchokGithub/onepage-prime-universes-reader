@@ -1,7 +1,10 @@
-import { MouseEvent, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useState } from "react";
 import {
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   FilePenLine,
+  KeyRound,
   Menu,
   Moon,
   Pencil,
@@ -79,6 +82,79 @@ type ManagementDialog =
       title: string;
       message: string;
     };
+
+type EditorPinState = {
+  failedAttempts: number;
+  lockouts: number;
+  cooldownUntil: number;
+};
+
+const EDITOR_PIN = "885522";
+const EDITOR_PIN_AUTH_KEY = "onepage-editor-pin-auth";
+const EDITOR_PIN_STATE_KEY = "onepage-editor-pin-state";
+const PIN_ATTEMPTS_BEFORE_COOLDOWN = 3;
+const FIRST_PIN_COOLDOWN_MS = 3 * 60 * 1000;
+const NEXT_PIN_COOLDOWN_MS = 5 * 60 * 1000;
+const EDITOR_PIN_AUTH_MS = 24 * 60 * 60 * 1000;
+
+function getStoredEditorPinAuth() {
+  try {
+    const rawAuth = localStorage.getItem(EDITOR_PIN_AUTH_KEY);
+    if (!rawAuth) return false;
+
+    const parsed = JSON.parse(rawAuth) as { expiresAt?: number };
+    if (!parsed.expiresAt || parsed.expiresAt <= Date.now()) {
+      localStorage.removeItem(EDITOR_PIN_AUTH_KEY);
+      return false;
+    }
+
+    return true;
+  } catch {
+    localStorage.removeItem(EDITOR_PIN_AUTH_KEY);
+    return false;
+  }
+}
+
+function setStoredEditorPinAuth() {
+  localStorage.setItem(
+    EDITOR_PIN_AUTH_KEY,
+    JSON.stringify({ expiresAt: Date.now() + EDITOR_PIN_AUTH_MS }),
+  );
+}
+
+function getStoredEditorPinState(): EditorPinState {
+  const fallback = {
+    failedAttempts: 0,
+    lockouts: 0,
+    cooldownUntil: 0,
+  };
+
+  try {
+    const rawState = localStorage.getItem(EDITOR_PIN_STATE_KEY);
+    if (!rawState) return fallback;
+
+    const parsed = JSON.parse(rawState) as Partial<EditorPinState>;
+    return {
+      failedAttempts: Number(parsed.failedAttempts) || 0,
+      lockouts: Number(parsed.lockouts) || 0,
+      cooldownUntil: Number(parsed.cooldownUntil) || 0,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function setStoredEditorPinState(state: EditorPinState) {
+  localStorage.setItem(EDITOR_PIN_STATE_KEY, JSON.stringify(state));
+}
+
+function formatCooldown(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 
 function getEditableTitle(label: string) {
   return label
@@ -160,6 +236,16 @@ export function AppLayout() {
   const [managementDialog, setManagementDialog] =
     useState<ManagementDialog | null>(null);
   const [isManagementBusy, setIsManagementBusy] = useState(false);
+  const [isEditorUnlocked, setIsEditorUnlocked] = useState(
+    getStoredEditorPinAuth,
+  );
+  const [pinValue, setPinValue] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinState, setPinState] = useState(getStoredEditorPinState);
+  const [pinNow, setPinNow] = useState(Date.now());
+  const [collapsedVolumeIds, setCollapsedVolumeIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const location = useLocation();
   const navigate = useNavigate();
   const {
@@ -169,6 +255,9 @@ export function AppLayout() {
   } = useParams();
   const isReadRoute = location.pathname.startsWith("/read/");
   const isEditorRoute = location.pathname.startsWith("/editor");
+  const shouldLockEditor = isEditorRoute && !isEditorUnlocked;
+  const canUseEditorControls = isEditorRoute && isEditorUnlocked;
+  const pinCooldownMs = Math.max(0, pinState.cooldownUntil - pinNow);
   const catalog = getCatalog();
   const firstReaderPath = getFirstReaderPath();
   const firstEditorPath = getFirstEditorPath();
@@ -178,6 +267,38 @@ export function AppLayout() {
   const currentArc =
     currentVolume?.arcs.find((arc) => arc.id === activeArc) ??
     currentVolume?.arcs[0];
+
+  useEffect(() => {
+    if (isEditorRoute) {
+      setIsEditorUnlocked(getStoredEditorPinAuth());
+      return;
+    }
+
+    setPinValue("");
+    setPinError("");
+  }, [isEditorRoute]);
+
+  useEffect(() => {
+    if (!shouldLockEditor || pinCooldownMs <= 0) return;
+
+    const interval = window.setInterval(() => {
+      setPinNow(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [pinCooldownMs, shouldLockEditor]);
+
+  useEffect(() => {
+    if (!activeVol) return;
+
+    setCollapsedVolumeIds((currentIds) => {
+      if (!currentIds.has(activeVol)) return currentIds;
+
+      const nextIds = new Set(currentIds);
+      nextIds.delete(activeVol);
+      return nextIds;
+    });
+  }, [activeVol]);
 
   const topNavClass = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -510,6 +631,74 @@ export function AppLayout() {
     setIsManagementBusy(false);
   };
 
+  const submitEditorPin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (pinCooldownMs > 0) return;
+
+    if (pinValue === EDITOR_PIN) {
+      setStoredEditorPinAuth();
+      localStorage.removeItem(EDITOR_PIN_STATE_KEY);
+      setIsEditorUnlocked(true);
+      setPinValue("");
+      setPinError("");
+      setPinState({
+        failedAttempts: 0,
+        lockouts: 0,
+        cooldownUntil: 0,
+      });
+      return;
+    }
+
+    const failedAttempts = pinState.failedAttempts + 1;
+
+    if (failedAttempts >= PIN_ATTEMPTS_BEFORE_COOLDOWN) {
+      const lockouts = pinState.lockouts + 1;
+      const cooldownMs =
+        lockouts === 1 ? FIRST_PIN_COOLDOWN_MS : NEXT_PIN_COOLDOWN_MS;
+      const nextState = {
+        failedAttempts: 0,
+        lockouts,
+        cooldownUntil: Date.now() + cooldownMs,
+      };
+
+      setStoredEditorPinState(nextState);
+      setPinState(nextState);
+      setPinNow(Date.now());
+      setPinError(
+        `Wrong PIN 3 times. Try again in ${formatCooldown(cooldownMs)}.`,
+      );
+    } else {
+      const nextState = {
+        ...pinState,
+        failedAttempts,
+      };
+      const attemptsLeft = PIN_ATTEMPTS_BEFORE_COOLDOWN - failedAttempts;
+
+      setStoredEditorPinState(nextState);
+      setPinState(nextState);
+      setPinError(
+        `Wrong PIN. ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} left.`,
+      );
+    }
+
+    setPinValue("");
+  };
+
+  const toggleVolumeCollapsed = (volumeId: string) => {
+    setCollapsedVolumeIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(volumeId)) {
+        nextIds.delete(volumeId);
+      } else {
+        nextIds.add(volumeId);
+      }
+
+      return nextIds;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-background font-sans text-foreground">
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
@@ -531,7 +720,7 @@ export function AppLayout() {
               to={firstReaderPath}
               onClick={(event) => requestReadNavigation(event, firstReaderPath)}
               className="text-lg font-semibold">
-              One Page Reader
+              One Page Universe
             </NavLink>
           </div>
 
@@ -577,7 +766,7 @@ export function AppLayout() {
         )}>
         <aside
           className={cn(
-            "border-b bg-background px-4 py-4 md:block md:min-h-[calc(100vh-4rem)] md:border-b-0 md:border-r",
+            "border-b bg-background px-4 py-4 md:sticky md:top-16 md:block md:max-h-[calc(100vh-4rem)] md:overflow-y-auto md:border-b-0 md:border-r",
             sidebarOpen ? "block" : "hidden",
           )}>
           <div className="space-y-4">
@@ -586,7 +775,7 @@ export function AppLayout() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Library
                 </p>
-                {isEditorRoute ? (
+                {canUseEditorControls ? (
                   <div className="flex items-center gap-1">
                     <Button
                       type="button"
@@ -618,11 +807,26 @@ export function AppLayout() {
                 Add .md files under src/content/vol-1/arc-1.
               </p>
             ) : null}
-            {catalog.volumes.map((volume) => (
+            {catalog.volumes.map((volume) => {
+              const isCollapsed = collapsedVolumeIds.has(volume.id);
+
+              return (
               <div key={volume.id} className="space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="min-w-0 font-medium">{volume.title}</p>
-                  {isEditorRoute ? (
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-1 rounded-md py-1 pr-2 text-left font-medium transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => toggleVolumeCollapsed(volume.id)}
+                    aria-expanded={!isCollapsed}
+                    aria-controls={`volume-${volume.id}-items`}>
+                    {isCollapsed ? (
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1">{volume.title}</span>
+                  </button>
+                  {canUseEditorControls ? (
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
                         type="button"
@@ -663,13 +867,16 @@ export function AppLayout() {
                     </div>
                   ) : null}
                 </div>
-                {volume.arcs.map((arc) => (
-                  <div key={arc.id} className="space-y-2 pl-2">
+                <div
+                  id={`volume-${volume.id}-items`}
+                  className={cn("space-y-3", isCollapsed && "hidden")}>
+                  {volume.arcs.map((arc) => (
+                    <div key={arc.id} className="space-y-2 pl-2">
                     <div className="flex items-center justify-between gap-2">
                       <p className="min-w-0 text-sm text-muted-foreground">
                         {arc.title}
                       </p>
-                      {isEditorRoute ? (
+                      {canUseEditorControls ? (
                         <div className="flex shrink-0 items-center gap-1">
                           <Button
                             type="button"
@@ -729,7 +936,7 @@ export function AppLayout() {
                             }>
                             {chapter.title}
                           </NavLink>
-                          {isEditorRoute ? (
+                          {canUseEditorControls ? (
                             <div className="flex shrink-0 items-center gap-1">
                               <Button
                                 type="button"
@@ -767,7 +974,7 @@ export function AppLayout() {
                           ) : null}
                         </div>
                       ))}
-                      {isEditorRoute ? (
+                      {canUseEditorControls ? (
                         <Button
                           type="button"
                           variant="ghost"
@@ -784,10 +991,12 @@ export function AppLayout() {
                         </Button>
                       ) : null}
                     </div>
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </aside>
 
@@ -796,9 +1005,97 @@ export function AppLayout() {
             "min-w-0 px-4 py-8",
             isEditorRoute ? "md:px-6" : "md:px-8",
           )}>
-          <Outlet context={{ setEditorNavigationGuard }} />
+          {shouldLockEditor ? (
+            <div className="flex min-h-[calc(100vh-10rem)] items-center justify-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+              Enter the editor PIN to continue.
+            </div>
+          ) : (
+            <Outlet context={{ setEditorNavigationGuard }} />
+          )}
         </main>
       </div>
+      {shouldLockEditor ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4">
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="editor-pin-title"
+            className="w-full max-w-sm rounded-md border bg-card p-5 text-card-foreground shadow-xl"
+            onSubmit={submitEditorPin}>
+            <div className="flex items-start gap-3">
+              <div className="rounded-md bg-primary/10 p-2 text-primary">
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="editor-pin-title" className="text-lg font-semibold">
+                  Editor PIN
+                </h2>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Enter the 6 digit PIN to edit content.
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block">
+              <span className="sr-only">Editor PIN</span>
+              <div className="relative">
+                <div className="grid grid-cols-6 gap-2">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className={cn(
+                        "flex aspect-square items-center justify-center rounded-md border bg-background text-lg font-semibold",
+                        pinValue.length === index &&
+                          pinCooldownMs <= 0 &&
+                          "border-primary ring-2 ring-ring",
+                      )}>
+                      {pinValue[index] ? "•" : ""}
+                    </div>
+                  ))}
+                </div>
+                <input
+                  value={pinValue}
+                  onChange={(event) => {
+                    setPinValue(
+                      event.target.value.replace(/\D/g, "").slice(0, 6),
+                    );
+                    setPinError("");
+                  }}
+                  className="absolute inset-0 h-full w-full cursor-text opacity-0"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  disabled={pinCooldownMs > 0}
+                />
+              </div>
+            </label>
+
+            {pinCooldownMs > 0 ? (
+              <p className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                Try again in {formatCooldown(pinCooldownMs)}.
+              </p>
+            ) : pinError ? (
+              <p className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {pinError}
+              </p>
+            ) : null}
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(firstReaderPath)}>
+                Back to Reader
+              </Button>
+              <Button
+                type="submit"
+                disabled={pinValue.length < 6 || pinCooldownMs > 0}>
+                Unlock
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       {managementDialog ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4">
           <form

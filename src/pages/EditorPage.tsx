@@ -9,6 +9,7 @@ import {
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
+import remarkBreaks from "remark-breaks";
 import {
   CheckCircle2,
   Download,
@@ -486,7 +487,10 @@ export function EditorPage() {
                   theme === "dark" ? "bg-[#0d1117]" : "bg-white",
                 )}>
                 {value.trim() ? (
-                  <MDEditor.Markdown source={value} />
+                  <MDEditor.Markdown
+                    source={value}
+                    remarkPlugins={[remarkBreaks]}
+                  />
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Preview will appear here.
