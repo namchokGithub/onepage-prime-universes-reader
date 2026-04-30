@@ -29,10 +29,58 @@ const collator = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 
+function toRomanNumeral(value: number) {
+  const numerals: Array<[number, string]> = [
+    [1000, "M"],
+    [900, "CM"],
+    [500, "D"],
+    [400, "CD"],
+    [100, "C"],
+    [90, "XC"],
+    [50, "L"],
+    [40, "XL"],
+    [10, "X"],
+    [9, "IX"],
+    [5, "V"],
+    [4, "IV"],
+    [1, "I"],
+  ];
+  let remaining = value;
+  let result = "";
+
+  numerals.forEach(([number, numeral]) => {
+    while (remaining >= number) {
+      result += numeral;
+      remaining -= number;
+    }
+  });
+
+  return result;
+}
+
 function titleFromSegment(segment: string, fallbackPrefix: string) {
-  const match = segment.match(/^(?:vol|volume|arc|ch|chapter)-(.+)$/i);
-  const titlePart = match?.[1] ?? segment;
+  const match = segment.match(/^(vol|volume|arc|ch|chapter)-(.+)$/i);
+  const segmentType = match?.[1]?.toLowerCase();
+  const titlePart = match?.[2] ?? segment;
   const normalizedTitle = titlePart.replace(/[-_]+/g, " ").trim();
+
+  const numberedTitle = normalizedTitle.match(/^(\d+)\s+(.+)$/);
+
+  if (
+    numberedTitle &&
+    segmentType &&
+    ["vol", "volume", "arc"].includes(segmentType)
+  ) {
+    return `${toRomanNumeral(Number(numberedTitle[1]))}. ${numberedTitle[2]}`;
+  }
+
+  if (
+    numberedTitle &&
+    segmentType &&
+    ["ch", "chapter"].includes(segmentType)
+  ) {
+    return `${fallbackPrefix} ${Number(numberedTitle[1])}: ${numberedTitle[2]}`;
+  }
 
   if (/^\d+$/.test(normalizedTitle)) {
     return `${fallbackPrefix} ${Number(normalizedTitle)}`;
