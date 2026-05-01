@@ -1,15 +1,18 @@
 import {
   collection,
-  deleteDoc,
   doc,
+  DocumentReference,
   getDoc,
   getDocs,
+  limit,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
   where,
   writeBatch,
+  WriteBatch,
 } from "firebase/firestore";
 import { getFirebaseDb } from "@/lib/firebase";
 
@@ -40,6 +43,12 @@ export type CreatedEntry = {
   chapter: string;
 };
 
+export type Backup = {
+  id: string;
+  content: string;
+  timestamp: number;
+};
+
 type ChapterDocument = {
   volId: string;
   volTitle: string;
@@ -54,6 +63,8 @@ type ChapterDocument = {
 };
 
 const CHAPTERS_COLLECTION = "chapters";
+const BACKUPS_COLLECTION = "backups";
+const MAX_BACKUPS = 10;
 
 const collator = new Intl.Collator(undefined, {
   numeric: true,
@@ -62,6 +73,77 @@ const collator = new Intl.Collator(undefined, {
 
 function documentId(vol: string, arc: string, chapter: string) {
   return [vol, arc, chapter].map(encodeURIComponent).join("__");
+}
+
+function chapterReference(vol: string, arc: string, chapter: string) {
+  return doc(getFirebaseDb(), CHAPTERS_COLLECTION, documentId(vol, arc, chapter));
+}
+
+function backupCollectionReference(vol: string, arc: string, chapter: string) {
+  return collection(chapterReference(vol, arc, chapter), BACKUPS_COLLECTION);
+}
+
+async function getBackupSnapshots(
+  vol: string,
+  arc: string,
+  chapter: string,
+  backupLimit: number,
+) {
+  return getDocs(
+    query(
+      backupCollectionReference(vol, arc, chapter),
+      orderBy("timestamp", "desc"),
+      limit(backupLimit),
+    ),
+  );
+}
+
+async function deleteChapterBackups(
+  batch: WriteBatch,
+  vol: string,
+  arc: string,
+  chapter: string,
+) {
+  const backupSnapshot = await getBackupSnapshots(
+    vol,
+    arc,
+    chapter,
+    MAX_BACKUPS + 10,
+  );
+
+  backupSnapshot.forEach((backup) => batch.delete(backup.ref));
+}
+
+async function copyChapterBackups(
+  batch: WriteBatch,
+  from: { vol: string; arc: string; chapter: string },
+  to: { vol: string; arc: string; chapter: string },
+) {
+  const backupSnapshot = await getBackupSnapshots(
+    from.vol,
+    from.arc,
+    from.chapter,
+    MAX_BACKUPS + 10,
+  );
+
+  backupSnapshot.forEach((backup) => {
+    batch.set(
+      doc(backupCollectionReference(to.vol, to.arc, to.chapter), backup.id),
+      backup.data(),
+    );
+    batch.delete(backup.ref);
+  });
+}
+
+async function deleteChapterDocument(
+  batch: WriteBatch,
+  chapterRef: DocumentReference,
+  vol: string,
+  arc: string,
+  chapter: string,
+) {
+  await deleteChapterBackups(batch, vol, arc, chapter);
+  batch.delete(chapterRef);
 }
 
 function parseOrder(segment: string, prefix: string) {
@@ -317,12 +399,7 @@ export async function getChapterContent(
   arc: string,
   chapter: string,
 ) {
-  const chapterReference = doc(
-    getFirebaseDb(),
-    CHAPTERS_COLLECTION,
-    documentId(vol, arc, chapter),
-  );
-  const snapshot = await getDoc(chapterReference);
+  const snapshot = await getDoc(chapterReference(vol, arc, chapter));
 
   if (!snapshot.exists()) {
     throw new Error(`Unable to load chapter: ${vol}/${arc}/${chapter}`);
@@ -339,10 +416,72 @@ export async function saveChapterContent(
   chapter: string,
   content: string,
 ) {
-  await updateDoc(doc(getFirebaseDb(), CHAPTERS_COLLECTION, documentId(vol, arc, chapter)), {
+  await updateDoc(chapterReference(vol, arc, chapter), {
     content,
     updatedAt: serverTimestamp(),
   });
+}
+
+export async function getBackups(vol?: string, arc?: string, chapter?: string) {
+  if (!vol || !arc || !chapter) return [];
+
+  const snapshot = await getBackupSnapshots(vol, arc, chapter, MAX_BACKUPS);
+
+  return snapshot.docs.map((backupSnapshot) => {
+    const data = backupSnapshot.data() as {
+      content?: string;
+      timestamp?: number;
+    };
+
+    return {
+      id: backupSnapshot.id,
+      content: data.content ?? "",
+      timestamp: Number(data.timestamp) || 0,
+    } satisfies Backup;
+  });
+}
+
+export async function saveBackup(
+  vol: string | undefined,
+  arc: string | undefined,
+  chapter: string | undefined,
+  content: string,
+) {
+  if (!vol || !arc || !chapter) return [];
+
+  const currentBackups = await getBackups(vol, arc, chapter);
+  if (currentBackups[0]?.content === content) return currentBackups;
+
+  await setDoc(doc(backupCollectionReference(vol, arc, chapter)), {
+    content,
+    timestamp: Date.now(),
+    createdAt: serverTimestamp(),
+  });
+
+  const snapshot = await getBackupSnapshots(vol, arc, chapter, MAX_BACKUPS + 10);
+  const nextBackups = snapshot.docs.map((backupSnapshot) => {
+    const data = backupSnapshot.data() as {
+      content?: string;
+      timestamp?: number;
+    };
+
+    return {
+      id: backupSnapshot.id,
+      content: data.content ?? "",
+      timestamp: Number(data.timestamp) || 0,
+    } satisfies Backup;
+  });
+  const staleBackups = nextBackups.slice(MAX_BACKUPS);
+
+  if (staleBackups.length > 0) {
+    const batch = writeBatch(getFirebaseDb());
+    staleBackups.forEach((backup) => {
+      batch.delete(doc(backupCollectionReference(vol, arc, chapter), backup.id));
+    });
+    await batch.commit();
+  }
+
+  return nextBackups.slice(0, MAX_BACKUPS);
 }
 
 export async function createEntry(
@@ -441,9 +580,19 @@ export async function deleteEntry(
       throw new Error("Missing chapter to delete");
     }
 
-    await deleteDoc(
-      doc(db, CHAPTERS_COLLECTION, documentId(context.vol, context.arc, context.chapter)),
+    const batch = writeBatch(db);
+    await deleteChapterDocument(
+      batch,
+      doc(
+        db,
+        CHAPTERS_COLLECTION,
+        documentId(context.vol, context.arc, context.chapter),
+      ),
+      context.vol,
+      context.arc,
+      context.chapter,
     );
+    await batch.commit();
     return;
   }
 
@@ -461,7 +610,18 @@ export async function deleteEntry(
   );
   const batch = writeBatch(db);
 
-  snapshot.forEach((chapterSnapshot) => batch.delete(chapterSnapshot.ref));
+  for (const chapterSnapshot of snapshot.docs) {
+    const chapterData = normalizeChapterDocument(
+      chapterSnapshot.data() as Partial<ChapterDocument>,
+    );
+    await deleteChapterDocument(
+      batch,
+      chapterSnapshot.ref,
+      chapterData.volId,
+      chapterData.arcId,
+      chapterData.chapterId,
+    );
+  }
   await batch.commit();
 }
 
@@ -491,13 +651,29 @@ export async function renameEntry(
       snapshot.data() as Partial<ChapterDocument>,
     );
     const batch = writeBatch(db);
-    batch.set(doc(db, CHAPTERS_COLLECTION, documentId(context.vol, context.arc, nextChapter)), {
-      ...current,
-      chapterId: nextChapter,
-      chapterTitle: titleFromSegment(nextChapter, "Chapter"),
-      chapterOrder: parseOrder(nextChapter, "ch"),
-      updatedAt: serverTimestamp(),
-    });
+    batch.set(
+      doc(db, CHAPTERS_COLLECTION, documentId(context.vol, context.arc, nextChapter)),
+      {
+        ...current,
+        chapterId: nextChapter,
+        chapterTitle: titleFromSegment(nextChapter, "Chapter"),
+        chapterOrder: parseOrder(nextChapter, "ch"),
+        updatedAt: serverTimestamp(),
+      },
+    );
+    await copyChapterBackups(
+      batch,
+      {
+        vol: context.vol,
+        arc: context.arc,
+        chapter: context.chapter,
+      },
+      {
+        vol: context.vol,
+        arc: context.arc,
+        chapter: nextChapter,
+      },
+    );
     batch.delete(oldReference);
     await batch.commit();
 
@@ -529,7 +705,7 @@ export async function renameEntry(
   );
   const batch = writeBatch(db);
 
-  snapshot.forEach((chapterSnapshot) => {
+  for (const chapterSnapshot of snapshot.docs) {
     const current = normalizeChapterDocument(
       chapterSnapshot.data() as Partial<ChapterDocument>,
     );
@@ -550,8 +726,21 @@ export async function renameEntry(
       doc(db, CHAPTERS_COLLECTION, documentId(renamed.volId, renamed.arcId, renamed.chapterId)),
       renamed,
     );
+    await copyChapterBackups(
+      batch,
+      {
+        vol: current.volId,
+        arc: current.arcId,
+        chapter: current.chapterId,
+      },
+      {
+        vol: renamed.volId,
+        arc: renamed.arcId,
+        chapter: renamed.chapterId,
+      },
+    );
     batch.delete(chapterSnapshot.ref);
-  });
+  }
 
   await batch.commit();
 

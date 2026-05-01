@@ -55,7 +55,7 @@ Designed for static deployment (GitHub Pages) and optimized reading experience.
 5. Copy `.env.example` to `.env` and fill in the `VITE_FIREBASE_*` values from the Firebase web app config.
 6. Deploy Firestore rules from `firestore.rules`.
 
-The app stores chapters in the `chapters` collection. Reads are public; writes require a signed-in user with a verified email.
+The app stores chapters in the `chapters` collection and editor backups in `chapters/{chapterId}/backups`. Chapter reads are public; chapter writes and all backup access require a signed-in user with a verified email.
 
 ---
 

@@ -27,10 +27,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useReaderStore } from "@/store/useReaderStore";
-import { Backup, getBackups, restoreBackup, saveBackup } from "@/utils/backup";
 import {
+  Backup,
   getChapterContent,
   getChapterTitle,
+  getBackups,
+  saveBackup,
   saveChapterContent,
 } from "@/utils/contentRepository";
 import type { AppLayoutOutletContext } from "@/components/AppLayout";
@@ -101,6 +103,7 @@ export function EditorPage() {
   const [value, setValue] = useState<string>("");
   const [fileName, setFileName] = useState("Untitled chapter");
   const [backups, setBackups] = useState<Backup[]>([]);
+  const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasWritableFile, setHasWritableFile] = useState(false);
   const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null);
@@ -112,16 +115,26 @@ export function EditorPage() {
   const fileHandleRef = useRef<MarkdownFileHandle | null>(null);
   const savedValueRef = useRef("");
 
-  const fileKey = useMemo(() => {
-    if (vol && arc && chapter) return `${vol}/${arc}/${chapter}`;
-
-    return fileName ? `file:${fileName}` : undefined;
-  }, [arc, chapter, fileName, vol]);
-
   useEffect(() => {
-    setBackups(getBackups(fileKey));
+    let active = true;
+
+    setIsBackupLoading(true);
     setSelectedBackupIndex(0);
-  }, [fileKey]);
+    getBackups(vol, arc, chapter)
+      .then((nextBackups) => {
+        if (active) setBackups(nextBackups);
+      })
+      .catch(() => {
+        if (active) setBackups([]);
+      })
+      .finally(() => {
+        if (active) setIsBackupLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [arc, chapter, vol]);
 
   useEffect(() => {
     if (!vol || !arc || !chapter) return;
@@ -233,7 +246,6 @@ export function EditorPage() {
         const writable = await fileHandle.createWritable();
         await writable.write(value);
         await writable.close();
-        setBackups(saveBackup(fileKey, value));
         savedValueRef.current = value;
         setLoadError(null);
         setSaveNotice({ type: "success", message: `Saved ${fileName}` });
@@ -244,7 +256,8 @@ export function EditorPage() {
         await saveChapterContent(vol, arc, chapter, value);
         await refreshCatalog();
         savedValueRef.current = value;
-        setBackups(saveBackup(fileKey, value));
+        setBackups(await saveBackup(vol, arc, chapter, value));
+        setSelectedBackupIndex(0);
         setLoadError(null);
         setSaveNotice({ type: "success", message: `Saved ${fileName}` });
         return true;
@@ -263,7 +276,7 @@ export function EditorPage() {
       }
       return false;
     }
-  }, [arc, chapter, fileKey, fileName, refreshCatalog, value, vol]);
+  }, [arc, chapter, fileName, refreshCatalog, value, vol]);
 
   const handleDownloadFile = () => {
     const blob = new Blob([value], { type: "text/markdown;charset=utf-8" });
@@ -284,7 +297,7 @@ export function EditorPage() {
   };
 
   const handleSelectBackup = (index: number) => {
-    const restoredContent = restoreBackup(fileKey, index);
+    const restoredContent = backups[index]?.content ?? null;
 
     if (restoredContent === null) return;
 
@@ -297,7 +310,7 @@ export function EditorPage() {
   };
 
   const handleRestoreBackup = (index: number) => {
-    const restoredContent = restoreBackup(fileKey, index);
+    const restoredContent = backups[index]?.content ?? null;
 
     if (restoredContent === null) return;
 
@@ -392,6 +405,7 @@ export function EditorPage() {
             </Button>
             <BackupList
               backups={backups}
+              isLoading={isBackupLoading}
               selectedIndex={selectedBackupIndex}
               onSelect={handleSelectBackup}
               onRestore={handleRestoreBackup}
