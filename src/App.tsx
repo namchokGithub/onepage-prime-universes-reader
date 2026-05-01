@@ -4,6 +4,8 @@ import { EditorPage } from "@/pages/EditorPage";
 import { ReaderPage } from "@/pages/ReaderPage";
 import { getFirstEditorPath, getFirstReaderPath } from "@/utils/contentCatalog";
 
+const CAN_USE_LOCAL_EDITOR = import.meta.env.DEV;
+
 export default function App() {
   const firstReaderPath = getFirstReaderPath();
   const firstEditorPath = getFirstEditorPath();
@@ -13,8 +15,25 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={<Navigate to={firstReaderPath} replace />} />
         <Route path="/read/:vol/:arc/:chapter" element={<ReaderPage />} />
-        <Route path="/editor" element={<Navigate to={firstEditorPath} replace />} />
-        <Route path="/editor/:vol/:arc/:chapter" element={<EditorPage />} />
+        <Route
+          path="/editor"
+          element={
+            <Navigate
+              to={CAN_USE_LOCAL_EDITOR ? firstEditorPath : firstReaderPath}
+              replace
+            />
+          }
+        />
+        <Route
+          path="/editor/:vol/:arc/:chapter"
+          element={
+            CAN_USE_LOCAL_EDITOR ? (
+              <EditorPage />
+            ) : (
+              <Navigate to={firstReaderPath} replace />
+            )
+          }
+        />
         <Route path="*" element={<Navigate to={firstReaderPath} replace />} />
       </Route>
     </Routes>

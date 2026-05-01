@@ -96,7 +96,7 @@ const PIN_ATTEMPTS_BEFORE_COOLDOWN = 3;
 const FIRST_PIN_COOLDOWN_MS = 3 * 60 * 1000;
 const NEXT_PIN_COOLDOWN_MS = 5 * 60 * 1000;
 const EDITOR_PIN_AUTH_MS = 24 * 60 * 60 * 1000;
-const CAN_WRITE_HOSTED_CONTENT = import.meta.env.DEV;
+const CAN_USE_LOCAL_EDITOR = import.meta.env.DEV;
 
 function getStoredEditorPinAuth() {
   try {
@@ -256,9 +256,10 @@ export function AppLayout() {
   } = useParams();
   const isReadRoute = location.pathname.startsWith("/read/");
   const isEditorRoute = location.pathname.startsWith("/editor");
-  const shouldLockEditor = isEditorRoute && !isEditorUnlocked;
+  const shouldLockEditor =
+    isEditorRoute && CAN_USE_LOCAL_EDITOR && !isEditorUnlocked;
   const canUseEditorControls =
-    isEditorRoute && isEditorUnlocked && CAN_WRITE_HOSTED_CONTENT;
+    isEditorRoute && isEditorUnlocked && CAN_USE_LOCAL_EDITOR;
   const pinCooldownMs = Math.max(0, pinState.cooldownUntil - pinNow);
   const catalog = getCatalog();
   const firstReaderPath = getFirstReaderPath();
@@ -738,14 +739,16 @@ export function AppLayout() {
                 Reader
               </NavLink>
             </Button>
-            <Button asChild variant="ghost" size="sm">
-              <NavLink
-                to={firstEditorPath}
-                className={!isReadRoute ? topNavClass : "disabled"}>
-                <FilePenLine className="h-4 w-4" />
-                Editor
-              </NavLink>
-            </Button>
+            {CAN_USE_LOCAL_EDITOR ? (
+              <Button asChild variant="ghost" size="sm">
+                <NavLink
+                  to={firstEditorPath}
+                  className={!isReadRoute ? topNavClass : "disabled"}>
+                  <FilePenLine className="h-4 w-4" />
+                  Editor
+                </NavLink>
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="icon"
