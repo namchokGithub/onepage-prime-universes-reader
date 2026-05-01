@@ -1,6 +1,6 @@
 # Novel Reader
 
-A lightweight one-page web novel reader with built-in editing support.
+A lightweight one-page web novel reader with Firebase-backed editing support.
 Designed for static deployment (GitHub Pages) and optimized reading experience.
 
 ---
@@ -16,8 +16,8 @@ Designed for static deployment (GitHub Pages) and optimized reading experience.
 
 ### Editor Mode
 
-- Edit `.txt` / `.md` files
-- Load from local file
+- Edit chapters stored in Cloud Firestore
+- Optional local Markdown import/export
 - Export edited content
 - Simple writing workflow
 
@@ -26,15 +26,11 @@ Designed for static deployment (GitHub Pages) and optimized reading experience.
 ## Project Structure
 
 ```
-/content
-  /vol-1
-    /arc-1
-      chapter-1.md
-
 /src
   /components
-  /features
+  /lib
   /pages
+  /utils
 ```
 
 ---
@@ -44,8 +40,22 @@ Designed for static deployment (GitHub Pages) and optimized reading experience.
 - Vite + React + TypeScript
 - Tailwind CSS
 - shadcn/ui components
+- Firebase Auth + Cloud Firestore
 - Zustand
 - React Router
+
+---
+
+## Firebase Setup
+
+1. Create a Firebase project.
+2. Enable Cloud Firestore.
+3. Enable Firebase Auth with the Email/Password provider.
+4. Add an editor user and verify their email.
+5. Copy `.env.example` to `.env` and fill in the `VITE_FIREBASE_*` values from the Firebase web app config.
+6. Deploy Firestore rules from `firestore.rules`.
+
+The app stores chapters in the `chapters` collection and editor backups in `chapters/{chapterId}/backups`. Chapter reads are public; chapter writes and all backup access require a signed-in user with a verified email.
 
 ---
 
@@ -60,7 +70,6 @@ This project is designed for **GitHub Pages**.
 
 ```bash
 npm run build
-npm run export
 ```
 
 ---

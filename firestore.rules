@@ -1,0 +1,23 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEditor() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true;
+    }
+
+    match /chapters/{chapterId} {
+      allow read: if true;
+      allow create, update, delete: if isEditor();
+
+      match /backups/{backupId} {
+        allow read, create, update, delete: if isEditor();
+      }
+    }
+  }
+}
