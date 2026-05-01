@@ -3,17 +3,18 @@ import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-markdown-preview/markdown.css";
 import { Moon, Plus, Settings2, Sun, X } from "lucide-react";
 import remarkBreaks from "remark-breaks";
-import { useParams } from "react-router-dom";
+import { useOutletContext, useParams } from "react-router-dom";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { fetchChapter } from "@/utils/fetchChapter";
-import { getCatalog } from "@/utils/contentCatalog";
+import { getChapterHeader } from "@/utils/contentRepository";
 import {
   ReaderFontSize,
   ReaderLineHeight,
   useReaderStore,
 } from "@/store/useReaderStore";
 import { cn } from "@/lib/utils";
+import type { AppLayoutOutletContext } from "@/components/AppLayout";
 
 const fontSizeClass: Record<ReaderFontSize, string> = {
   small: "text-base",
@@ -142,6 +143,7 @@ function ReaderPreferences({
 
 export function ReaderPage() {
   const { vol = "vol-1", arc = "arc-1", chapter = "chapter-1" } = useParams();
+  const { catalog } = useOutletContext<AppLayoutOutletContext>();
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -159,21 +161,8 @@ export function ReaderPage() {
     [vol, arc, chapter],
   );
   const readerHeader = useMemo(() => {
-    const catalog = getCatalog();
-    const catalogVolume = catalog.volumes.find((volume) => volume.id === vol);
-    const catalogArc = catalogVolume?.arcs.find(
-      (catalogArc) => catalogArc.id === arc,
-    );
-    const catalogChapter = catalogArc?.chapters.find(
-      (catalogChapter) => catalogChapter.chapter === chapter,
-    );
-
-    return {
-      volumeTitle: catalogVolume?.title ?? vol.replace(/[-_]+/g, " "),
-      arcTitle: catalogArc?.title ?? arc.replace(/[-_]+/g, " "),
-      chapterTitle: catalogChapter?.title ?? chapter.replace(/[-_]+/g, " "),
-    };
-  }, [arc, chapter, vol]);
+    return getChapterHeader(catalog, vol, arc, chapter);
+  }, [arc, catalog, chapter, vol]);
 
   useEffect(() => {
     let active = true;

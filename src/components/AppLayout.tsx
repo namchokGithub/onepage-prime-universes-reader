@@ -1,5 +1,12 @@
 import { FormEvent, MouseEvent, useEffect, useState } from "react";
 import {
+  User,
+  onAuthStateChanged,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+import {
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -23,13 +30,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useApplyTheme } from "@/hooks/useApplyTheme";
+import { getFirebaseAuth, isFirebaseConfigured } from "@/lib/firebase";
 import { useReaderStore } from "@/store/useReaderStore";
 import { cn } from "@/lib/utils";
 import {
-  getCatalog,
+  Catalog,
+  createEntry as createContentEntry,
+  deleteEntry as deleteContentEntry,
   getFirstEditorPath,
   getFirstReaderPath,
-} from "@/utils/contentCatalog";
+  renameEntry as renameContentEntry,
+} from "@/utils/contentRepository";
 
 type EditorNavigationGuard = {
   hasUnsavedChanges: boolean;
@@ -39,12 +50,6 @@ type EditorNavigationGuard = {
 type CreateEntryType = "volume" | "arc" | "chapter";
 
 type DeleteEntryType = CreateEntryType;
-
-type CreatedEntry = {
-  vol: string;
-  arc: string;
-  chapter: string;
-};
 
 type CreateEntryContext = {
   vol?: string;
@@ -96,8 +101,6 @@ const PIN_ATTEMPTS_BEFORE_COOLDOWN = 3;
 const FIRST_PIN_COOLDOWN_MS = 3 * 60 * 1000;
 const NEXT_PIN_COOLDOWN_MS = 5 * 60 * 1000;
 const EDITOR_PIN_AUTH_MS = 24 * 60 * 60 * 1000;
-const CAN_USE_LOCAL_EDITOR = import.meta.env.DEV;
-
 function getStoredEditorPinAuth() {
   try {
     const rawAuth = localStorage.getItem(EDITOR_PIN_AUTH_KEY);
@@ -221,10 +224,22 @@ function getDialogGuide(dialog: ManagementDialog) {
 }
 
 export type AppLayoutOutletContext = {
+  catalog: Catalog;
+  refreshCatalog: () => Promise<Catalog>;
   setEditorNavigationGuard: (guard: EditorNavigationGuard | null) => void;
 };
 
-export function AppLayout() {
+type AppLayoutProps = {
+  catalog: Catalog;
+  catalogError: string | null;
+  refreshCatalog: () => Promise<Catalog>;
+};
+
+export function AppLayout({
+  catalog,
+  catalogError,
+  refreshCatalog,
+}: AppLayoutProps) {
   useApplyTheme();
 
   const theme = useReaderStore((state) => state.theme);
@@ -240,6 +255,10 @@ export function AppLayout() {
   const [isEditorUnlocked, setIsEditorUnlocked] = useState(
     getStoredEditorPinAuth,
   );
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
   const [pinValue, setPinValue] = useState("");
   const [pinError, setPinError] = useState("");
   const [pinState, setPinState] = useState(getStoredEditorPinState);
@@ -256,20 +275,30 @@ export function AppLayout() {
   } = useParams();
   const isReadRoute = location.pathname.startsWith("/read/");
   const isEditorRoute = location.pathname.startsWith("/editor");
-  const shouldLockEditor =
-    isEditorRoute && CAN_USE_LOCAL_EDITOR && !isEditorUnlocked;
-  const canUseEditorControls =
-    isEditorRoute && isEditorUnlocked && CAN_USE_LOCAL_EDITOR;
+  const isUnverifiedFirebaseUser = Boolean(
+    firebaseUser && !firebaseUser.emailVerified,
+  );
+  const isEditorAuthenticated =
+    Boolean(firebaseUser?.emailVerified) && isEditorUnlocked;
+  const shouldLockEditor = isEditorRoute && !isEditorAuthenticated;
+  const canUseEditorControls = isEditorRoute && isEditorAuthenticated;
   const pinCooldownMs = Math.max(0, pinState.cooldownUntil - pinNow);
-  const catalog = getCatalog();
-  const firstReaderPath = getFirstReaderPath();
-  const firstEditorPath = getFirstEditorPath();
+  const firstReaderPath = getFirstReaderPath(catalog);
+  const firstEditorPath = getFirstEditorPath(catalog);
   const currentVolume =
     catalog.volumes.find((volume) => volume.id === activeVol) ??
     catalog.volumes[0];
   const currentArc =
     currentVolume?.arcs.find((arc) => arc.id === activeArc) ??
     currentVolume?.arcs[0];
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
+
+    return onAuthStateChanged(getFirebaseAuth(), (user) => {
+      setFirebaseUser(user);
+    });
+  }, []);
 
   useEffect(() => {
     if (isEditorRoute) {
@@ -311,10 +340,8 @@ export function AppLayout() {
     );
 
   const reloadToEditorPath = async (path: string) => {
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
-    window.location.assign(
-      `${window.location.pathname}?t=${Date.now()}#${path}`,
-    );
+    await refreshCatalog();
+    navigate(path, { replace: true });
   };
 
   const showMessage = (title: string, message: string) => {
@@ -357,7 +384,9 @@ export function AppLayout() {
       );
     });
 
-    return "/editor";
+    return remainingChapter
+      ? `/editor/${remainingChapter.vol}/${remainingChapter.arc}/${remainingChapter.chapter}`
+      : "/editor";
   };
 
   const getFirstChapterPathInSameArcAfterDelete = (
@@ -437,50 +466,42 @@ export function AppLayout() {
           "Unable to save",
           "Save the current chapter before creating.",
         );
-        return;
+        return false;
       }
     }
 
-    if (type !== "chapter" && !title?.trim()) return;
+    if (type !== "chapter" && !title?.trim()) return false;
 
     const selectedVol = context.vol ?? currentVolume?.id;
     const selectedArc = context.arc ?? currentArc?.id;
 
     if (type === "arc" && !selectedVol) {
       showMessage("Missing volume", "Create a volume before adding an arc.");
-      return;
+      return false;
     }
 
     if (type === "chapter" && (!selectedVol || !selectedArc)) {
       showMessage("Missing arc", "Create an arc before adding a chapter.");
-      return;
+      return false;
     }
 
     try {
-      const response = await fetch("/__editor/create-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type,
-          title,
+      const created = await createContentEntry(
+        catalog,
+        type,
+        {
           vol: selectedVol,
           arc: selectedArc,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = (await response.json().catch(() => null)) as {
-          message?: string;
-        } | null;
-        throw new Error(error?.message ?? "Unable to create entry.");
-      }
-
-      const created = (await response.json()) as CreatedEntry;
+        },
+        title,
+      );
       await reloadToEditorPath(
         `/editor/${created.vol}/${created.arc}/${created.chapter}`,
       );
+      return true;
     } catch (error) {
       showMessage("Unable to create", (error as Error).message);
+      return false;
     }
   };
 
@@ -496,27 +517,6 @@ export function AppLayout() {
     context: DeleteEntryContext,
   ) => {
     try {
-      const response = await fetch("/__editor/delete-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type,
-          vol: context.vol,
-          arc: context.arc,
-          chapter: context.chapter,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = (await response.json().catch(() => null)) as {
-          message?: string;
-        } | null;
-        throw new Error(error?.message ?? "Unable to delete entry.");
-      }
-
-      const result = (await response.json().catch(() => null)) as {
-        nextEditorPath?: string;
-      } | null;
       const currentPath =
         activeVol && activeArc && activeChapter
           ? `/editor/${activeVol}/${activeArc}/${activeChapter}`
@@ -524,16 +524,21 @@ export function AppLayout() {
       const nextPath =
         type === "chapter"
           ? (getFirstChapterPathInSameArcAfterDelete(context) ??
-            result?.nextEditorPath ??
             getClientNextPathAfterDelete(type, context))
           : isActiveEntryDeleted(type, context)
-            ? (result?.nextEditorPath ??
-              getClientNextPathAfterDelete(type, context))
+            ? getClientNextPathAfterDelete(type, context)
             : currentPath;
 
+      await deleteContentEntry(type, {
+        vol: context.vol,
+        arc: context.arc,
+        chapter: context.chapter,
+      });
       await reloadToEditorPath(nextPath);
+      return true;
     } catch (error) {
       showMessage("Unable to delete", (error as Error).message);
+      return false;
     }
   };
 
@@ -562,40 +567,32 @@ export function AppLayout() {
           "Unable to save",
           "Save the current chapter before renaming.",
         );
-        return;
+        return false;
       }
     }
 
-    if (!title.trim()) return;
+    if (!title.trim()) return false;
 
     try {
-      const response = await fetch("/__editor/rename-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type,
-          title,
+      const renamed = await renameContentEntry(
+        catalog,
+        type,
+        {
           vol: context.vol,
           arc: context.arc,
           chapter: context.chapter,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = (await response.json().catch(() => null)) as {
-          message?: string;
-        } | null;
-        throw new Error(error?.message ?? "Unable to rename entry.");
-      }
-
-      const renamed = (await response.json()) as CreatedEntry;
+        },
+        title,
+      );
       await reloadToEditorPath(
         renamed.vol && renamed.arc && renamed.chapter
           ? `/editor/${renamed.vol}/${renamed.arc}/${renamed.chapter}`
           : "/editor",
       );
+      return true;
     } catch (error) {
       showMessage("Unable to rename", (error as Error).message);
+      return false;
     }
   };
 
@@ -615,16 +612,21 @@ export function AppLayout() {
 
     setIsManagementBusy(true);
 
+    let didComplete = false;
+
     if (managementDialog.type === "create") {
-      await createEntry(
+      didComplete = await createEntry(
         managementDialog.entryType,
         managementDialog.context,
         managementDialog.value,
       );
     } else if (managementDialog.type === "delete") {
-      await deleteEntry(managementDialog.entryType, managementDialog.context);
+      didComplete = await deleteEntry(
+        managementDialog.entryType,
+        managementDialog.context,
+      );
     } else {
-      await renameEntry(
+      didComplete = await renameEntry(
         managementDialog.entryType,
         managementDialog.context,
         managementDialog.value,
@@ -632,24 +634,57 @@ export function AppLayout() {
     }
 
     setIsManagementBusy(false);
+    if (didComplete) setManagementDialog(null);
   };
 
-  const submitEditorPin = (event: FormEvent<HTMLFormElement>) => {
+  const submitEditorPin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (pinCooldownMs > 0) return;
+    if (!isFirebaseConfigured) {
+      setPinError("Firebase is not configured. Add VITE_FIREBASE_* values.");
+      return;
+    }
+
+    if (!firebaseUser && (!authEmail.trim() || !authPassword)) {
+      setPinError("Enter your Firebase editor email and password.");
+      return;
+    }
 
     if (pinValue === EDITOR_PIN) {
-      setStoredEditorPinAuth();
-      localStorage.removeItem(EDITOR_PIN_STATE_KEY);
-      setIsEditorUnlocked(true);
-      setPinValue("");
-      setPinError("");
-      setPinState({
-        failedAttempts: 0,
-        lockouts: 0,
-        cooldownUntil: 0,
-      });
+      setIsAuthBusy(true);
+      try {
+        let signedInUser = firebaseUser;
+        if (!firebaseUser) {
+          const credential = await signInWithEmailAndPassword(
+            getFirebaseAuth(),
+            authEmail.trim(),
+            authPassword,
+          );
+          signedInUser = credential.user;
+        }
+
+        if (!signedInUser?.emailVerified) {
+          setPinError("Verify your Firebase Auth email before editing.");
+          return;
+        }
+
+        setStoredEditorPinAuth();
+        localStorage.removeItem(EDITOR_PIN_STATE_KEY);
+        setIsEditorUnlocked(true);
+        setPinValue("");
+        setPinError("");
+        setAuthPassword("");
+        setPinState({
+          failedAttempts: 0,
+          lockouts: 0,
+          cooldownUntil: 0,
+        });
+      } catch (error) {
+        setPinError((error as Error).message);
+      } finally {
+        setIsAuthBusy(false);
+      }
       return;
     }
 
@@ -702,6 +737,48 @@ export function AppLayout() {
     });
   };
 
+  const signOutEditor = async () => {
+    localStorage.removeItem(EDITOR_PIN_AUTH_KEY);
+    setIsEditorUnlocked(false);
+    setPinError("");
+    setPinValue("");
+    setAuthPassword("");
+    if (isFirebaseConfigured) {
+      await signOut(getFirebaseAuth());
+    }
+  };
+
+  const refreshFirebaseUser = async () => {
+    if (!firebaseUser) return;
+
+    setIsAuthBusy(true);
+    try {
+      await firebaseUser.reload();
+      setFirebaseUser(getFirebaseAuth().currentUser);
+      setPinError("");
+    } catch (error) {
+      setPinError((error as Error).message);
+    } finally {
+      setIsAuthBusy(false);
+    }
+  };
+
+  const sendFirebaseVerificationEmail = async () => {
+    if (!firebaseUser) return;
+
+    setIsAuthBusy(true);
+    try {
+      await sendEmailVerification(firebaseUser);
+      setPinError(
+        "Verification email sent. Check your inbox, then come back and press I verified it.",
+      );
+    } catch (error) {
+      setPinError((error as Error).message);
+    } finally {
+      setIsAuthBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background font-sans text-foreground">
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur">
@@ -739,14 +816,21 @@ export function AppLayout() {
                 Reader
               </NavLink>
             </Button>
-            {CAN_USE_LOCAL_EDITOR ? (
-              <Button asChild variant="ghost" size="sm">
-                <NavLink
-                  to={firstEditorPath}
-                  className={!isReadRoute ? topNavClass : "disabled"}>
-                  <FilePenLine className="h-4 w-4" />
-                  Editor
-                </NavLink>
+            <Button asChild variant="ghost" size="sm">
+              <NavLink
+                to={firstEditorPath}
+                className={!isReadRoute ? topNavClass : "disabled"}>
+                <FilePenLine className="h-4 w-4" />
+                Editor
+              </NavLink>
+            </Button>
+            {canUseEditorControls ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void signOutEditor()}>
+                Sign out
               </Button>
             ) : null}
             <Button
@@ -807,140 +891,85 @@ export function AppLayout() {
               </div>
               <Separator className="mt-3" />
             </div>
+            {catalogError ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                {catalogError}
+              </p>
+            ) : null}
             {catalog.volumes.length === 0 ? (
               <p className="rounded-md border p-3 text-sm text-muted-foreground">
-                Add .md files under src/content/vol-1/arc-1.
+                Add chapters in Firebase to populate the library.
               </p>
             ) : null}
             {catalog.volumes.map((volume) => {
               const isCollapsed = collapsedVolumeIds.has(volume.id);
 
               return (
-              <div key={volume.id} className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-1 rounded-md py-1 pr-2 text-left font-medium transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => toggleVolumeCollapsed(volume.id)}
-                    aria-expanded={!isCollapsed}
-                    aria-controls={`volume-${volume.id}-items`}>
-                    {isCollapsed ? (
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1">{volume.title}</span>
-                  </button>
-                  {canUseEditorControls ? (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground"
-                        onClick={() =>
-                          requestRenameEntry("volume", {
-                            vol: volume.id,
-                            arc:
-                              volume.id === activeVol
-                                ? activeArc
-                                : volume.arcs[0]?.id,
-                            chapter:
-                              volume.id === activeVol
-                                ? activeChapter
-                                : volume.arcs[0]?.chapters[0]?.chapter,
-                            label: volume.title,
-                          })
-                        }
-                        title="Rename volume">
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() =>
-                          requestDeleteEntry("volume", {
-                            vol: volume.id,
-                            label: volume.title,
-                          })
-                        }
-                        title="Delete volume">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-                <div
-                  id={`volume-${volume.id}-items`}
-                  className={cn("space-y-3", isCollapsed && "hidden")}>
-                  {volume.arcs.map((arc) => (
-                    <div key={arc.id} className="space-y-2 pl-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="min-w-0 text-sm text-muted-foreground">
-                        {arc.title}
-                      </p>
-                      {canUseEditorControls ? (
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground"
-                            onClick={() =>
-                              requestRenameEntry("arc", {
-                                vol: volume.id,
-                                arc: arc.id,
-                                chapter:
-                                  volume.id === activeVol &&
-                                  arc.id === activeArc
-                                    ? activeChapter
-                                    : arc.chapters[0]?.chapter,
-                                label: arc.title,
-                              })
-                            }
-                            title="Rename arc">
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() =>
-                              requestDeleteEntry("arc", {
-                                vol: volume.id,
-                                arc: arc.id,
-                                label: arc.title,
-                              })
-                            }
-                            title="Delete arc">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1">
-                      {arc.chapters.map((chapter) => (
-                        <div
-                          key={`${chapter.vol}-${chapter.arc}-${chapter.chapter}`}
-                          className="flex items-center gap-1">
-                          <NavLink
-                            to={
-                              isEditorRoute
-                                ? `/editor/${chapter.vol}/${chapter.arc}/${chapter.chapter}`
-                                : `/read/${chapter.vol}/${chapter.arc}/${chapter.chapter}`
-                            }
-                            onClick={() => setSidebarOpen(false)}
-                            className={({ isActive }) =>
-                              cn(
-                                "min-w-0 flex-1 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent",
-                                isActive && "bg-accent text-accent-foreground",
-                              )
-                            }>
-                            {chapter.title}
-                          </NavLink>
+                <div key={volume.id} className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-1 rounded-md py-1 pr-2 text-left font-medium transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => toggleVolumeCollapsed(volume.id)}
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`volume-${volume.id}-items`}>
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="min-w-0 flex-1">{volume.title}</span>
+                    </button>
+                    {canUseEditorControls ? (
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground"
+                          onClick={() =>
+                            requestRenameEntry("volume", {
+                              vol: volume.id,
+                              arc:
+                                volume.id === activeVol
+                                  ? activeArc
+                                  : volume.arcs[0]?.id,
+                              chapter:
+                                volume.id === activeVol
+                                  ? activeChapter
+                                  : volume.arcs[0]?.chapters[0]?.chapter,
+                              label: volume.title,
+                            })
+                          }
+                          title="Rename volume">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() =>
+                            requestDeleteEntry("volume", {
+                              vol: volume.id,
+                              label: volume.title,
+                            })
+                          }
+                          title="Delete volume">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div
+                    id={`volume-${volume.id}-items`}
+                    className={cn("space-y-3", isCollapsed && "hidden")}>
+                    {volume.arcs.map((arc) => (
+                      <div key={arc.id} className="space-y-2 pl-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="min-w-0 text-sm text-muted-foreground">
+                            {arc.title}
+                          </p>
                           {canUseEditorControls ? (
                             <div className="flex shrink-0 items-center gap-1">
                               <Button
@@ -949,14 +978,18 @@ export function AppLayout() {
                                 size="icon"
                                 className="h-8 w-8 text-muted-foreground"
                                 onClick={() =>
-                                  requestRenameEntry("chapter", {
-                                    vol: chapter.vol,
-                                    arc: chapter.arc,
-                                    chapter: chapter.chapter,
-                                    label: chapter.title,
+                                  requestRenameEntry("arc", {
+                                    vol: volume.id,
+                                    arc: arc.id,
+                                    chapter:
+                                      volume.id === activeVol &&
+                                      arc.id === activeArc
+                                        ? activeChapter
+                                        : arc.chapters[0]?.chapter,
+                                    label: arc.title,
                                   })
                                 }
-                                title="Rename chapter">
+                                title="Rename arc">
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                               <Button
@@ -965,41 +998,98 @@ export function AppLayout() {
                                 size="icon"
                                 className="h-8 w-8 text-muted-foreground hover:text-destructive"
                                 onClick={() =>
-                                  requestDeleteEntry("chapter", {
-                                    vol: chapter.vol,
-                                    arc: chapter.arc,
-                                    chapter: chapter.chapter,
-                                    label: chapter.title,
+                                  requestDeleteEntry("arc", {
+                                    vol: volume.id,
+                                    arc: arc.id,
+                                    label: arc.title,
                                   })
                                 }
-                                title="Delete chapter">
+                                title="Delete arc">
                                 <Trash2 className="h-3.5 w-3.5" />
                               </Button>
                             </div>
                           ) : null}
                         </div>
-                      ))}
-                      {canUseEditorControls ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-full justify-start px-3 text-muted-foreground"
-                          onClick={() =>
-                            requestCreateEntry("chapter", {
-                              vol: volume.id,
-                              arc: arc.id,
-                            })
-                          }>
-                          <Plus className="h-3.5 w-3.5" />
-                          Chapter
-                        </Button>
-                      ) : null}
-                    </div>
-                    </div>
-                  ))}
+                        <div className="space-y-1">
+                          {arc.chapters.map((chapter) => (
+                            <div
+                              key={`${chapter.vol}-${chapter.arc}-${chapter.chapter}`}
+                              className="flex items-center gap-1">
+                              <NavLink
+                                to={
+                                  isEditorRoute
+                                    ? `/editor/${chapter.vol}/${chapter.arc}/${chapter.chapter}`
+                                    : `/read/${chapter.vol}/${chapter.arc}/${chapter.chapter}`
+                                }
+                                onClick={() => setSidebarOpen(false)}
+                                className={({ isActive }) =>
+                                  cn(
+                                    "min-w-0 flex-1 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent",
+                                    isActive &&
+                                      "bg-accent text-accent-foreground",
+                                  )
+                                }>
+                                {chapter.title}
+                              </NavLink>
+                              {canUseEditorControls ? (
+                                <div className="flex shrink-0 items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground"
+                                    onClick={() =>
+                                      requestRenameEntry("chapter", {
+                                        vol: chapter.vol,
+                                        arc: chapter.arc,
+                                        chapter: chapter.chapter,
+                                        label: chapter.title,
+                                      })
+                                    }
+                                    title="Rename chapter">
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                    onClick={() =>
+                                      requestDeleteEntry("chapter", {
+                                        vol: chapter.vol,
+                                        arc: chapter.arc,
+                                        chapter: chapter.chapter,
+                                        label: chapter.title,
+                                      })
+                                    }
+                                    title="Delete chapter">
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                          {canUseEditorControls ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-full justify-start px-3 text-muted-foreground"
+                              onClick={() =>
+                                requestCreateEntry("chapter", {
+                                  vol: volume.id,
+                                  arc: arc.id,
+                                })
+                              }>
+                              <Plus className="h-3.5 w-3.5" />
+                              Chapter
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
               );
             })}
           </div>
@@ -1015,7 +1105,9 @@ export function AppLayout() {
               Enter the editor PIN to continue.
             </div>
           ) : (
-            <Outlet context={{ setEditorNavigationGuard }} />
+            <Outlet
+              context={{ catalog, refreshCatalog, setEditorNavigationGuard }}
+            />
           )}
         </main>
       </div>
@@ -1033,47 +1125,119 @@ export function AppLayout() {
               </div>
               <div className="min-w-0 flex-1">
                 <h2 id="editor-pin-title" className="text-lg font-semibold">
-                  Editor PIN
+                  Editor sign in
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Enter the 6 digit PIN to edit content.
+                  Sign in with Firebase Auth, then enter the 6 digit PIN.
                 </p>
               </div>
             </div>
 
-            <label className="mt-5 block">
-              <span className="sr-only">Editor PIN</span>
-              <div className="relative">
-                <div className="grid grid-cols-6 gap-2">
-                  {Array.from({ length: 6 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className={cn(
-                        "flex aspect-square items-center justify-center rounded-md border bg-background text-lg font-semibold",
-                        pinValue.length === index &&
-                          pinCooldownMs <= 0 &&
-                          "border-primary ring-2 ring-ring",
-                      )}>
-                      {pinValue[index] ? "•" : ""}
-                    </div>
-                  ))}
-                </div>
-                <input
-                  value={pinValue}
-                  onChange={(event) => {
-                    setPinValue(
-                      event.target.value.replace(/\D/g, "").slice(0, 6),
-                    );
-                    setPinError("");
-                  }}
-                  className="absolute inset-0 h-full w-full cursor-text opacity-0"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  autoFocus
-                  disabled={pinCooldownMs > 0}
-                />
+            {!firebaseUser ? (
+              <div className="mt-5 grid gap-3">
+                <label className="block text-sm">
+                  <span className="font-medium">Email</span>
+                  <input
+                    type="email"
+                    value={authEmail}
+                    onChange={(event) => {
+                      setAuthEmail(event.target.value);
+                      setPinError("");
+                    }}
+                    className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                    autoComplete="email"
+                    disabled={isAuthBusy || pinCooldownMs > 0}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="font-medium">Password</span>
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(event) => {
+                      setAuthPassword(event.target.value);
+                      setPinError("");
+                    }}
+                    className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                    autoComplete="current-password"
+                    disabled={isAuthBusy || pinCooldownMs > 0}
+                  />
+                </label>
               </div>
-            </label>
+            ) : isUnverifiedFirebaseUser ? (
+              <div className="mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-sm text-destructive">
+                <p>
+                  {firebaseUser.email ?? "This Firebase Auth email"} is not
+                  verified yet.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void sendFirebaseVerificationEmail()}
+                    disabled={isAuthBusy}>
+                    Send verification email
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void refreshFirebaseUser()}
+                    disabled={isAuthBusy}>
+                    I verified it
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void signOutEditor()}
+                    disabled={isAuthBusy}>
+                    Use another email
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-5 rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground">
+                Signed in as {firebaseUser.email}
+              </p>
+            )}
+
+            {!isUnverifiedFirebaseUser ? (
+              <label className="mt-5 block">
+                <span className="sr-only">Editor PIN</span>
+                <div className="relative">
+                  <div className="grid grid-cols-6 gap-2">
+                    {Array.from({ length: 6 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className={cn(
+                          "flex aspect-square items-center justify-center rounded-md border bg-background text-lg font-semibold",
+                          pinValue.length === index &&
+                            pinCooldownMs <= 0 &&
+                            "border-primary ring-2 ring-ring",
+                        )}>
+                        {pinValue[index] ? "•" : ""}
+                      </div>
+                    ))}
+                  </div>
+                  <input
+                    value={pinValue}
+                    onChange={(event) => {
+                      setPinValue(
+                        event.target.value.replace(/\D/g, "").slice(0, 6),
+                      );
+                      setPinError("");
+                    }}
+                    className="absolute inset-0 h-full w-full cursor-text opacity-0"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    disabled={isAuthBusy || pinCooldownMs > 0}
+                  />
+                </div>
+              </label>
+            ) : null}
 
             {pinCooldownMs > 0 ? (
               <p className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -1094,8 +1258,13 @@ export function AppLayout() {
               </Button>
               <Button
                 type="submit"
-                disabled={pinValue.length < 6 || pinCooldownMs > 0}>
-                Unlock
+                disabled={
+                  isAuthBusy ||
+                  isUnverifiedFirebaseUser ||
+                  pinValue.length < 6 ||
+                  pinCooldownMs > 0
+                }>
+                {isAuthBusy ? "Signing in..." : "Unlock"}
               </Button>
             </div>
           </form>
@@ -1155,8 +1324,7 @@ export function AppLayout() {
                 ) : managementDialog.type === "delete" ? (
                   <div className="mt-2 space-y-2 text-sm text-muted-foreground">
                     <p>
-                      Delete "{managementDialog.context.label}" from
-                      src/content?
+                      Delete "{managementDialog.context.label}" from Firebase?
                     </p>
                     {editorNavigationGuard?.hasUnsavedChanges ? (
                       <p className="text-destructive">

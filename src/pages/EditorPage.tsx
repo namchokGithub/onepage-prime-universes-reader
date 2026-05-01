@@ -28,7 +28,11 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useReaderStore } from "@/store/useReaderStore";
 import { Backup, getBackups, restoreBackup, saveBackup } from "@/utils/backup";
-import { getChapterContent, getChapterTitle } from "@/utils/contentCatalog";
+import {
+  getChapterContent,
+  getChapterTitle,
+  saveChapterContent,
+} from "@/utils/contentRepository";
 import type { AppLayoutOutletContext } from "@/components/AppLayout";
 
 type MarkdownFileHandle = {
@@ -71,8 +75,6 @@ const IntlWithSegmenter = Intl as typeof Intl & {
   ) => IntlWordSegmenter;
 };
 
-const CAN_SAVE_HOSTED_CHAPTER = import.meta.env.DEV;
-
 function countWords(text: string) {
   const trimmedText = text.trim();
 
@@ -93,7 +95,7 @@ function countWords(text: string) {
 
 export function EditorPage() {
   const { vol, arc, chapter } = useParams();
-  const { setEditorNavigationGuard } =
+  const { catalog, refreshCatalog, setEditorNavigationGuard } =
     useOutletContext<AppLayoutOutletContext>();
   const theme = useReaderStore((state) => state.theme);
   const [value, setValue] = useState<string>("");
@@ -132,7 +134,7 @@ export function EditorPage() {
         if (!active) return;
         fileHandleRef.current = null;
         setHasWritableFile(false);
-        setFileName(`${getChapterTitle(vol, arc, chapter)}.md`);
+        setFileName(`${getChapterTitle(catalog, vol, arc, chapter)}.md`);
         savedValueRef.current = content;
         setValue(content);
       })
@@ -149,7 +151,7 @@ export function EditorPage() {
     return () => {
       active = false;
     };
-  }, [arc, chapter, vol]);
+  }, [arc, catalog, chapter, vol]);
 
   useEffect(() => {
     if (!saveNotice) return;
@@ -239,28 +241,8 @@ export function EditorPage() {
       }
 
       if (vol && arc && chapter) {
-        if (!CAN_SAVE_HOSTED_CHAPTER) {
-          setBackups(saveBackup(fileKey, value));
-          savedValueRef.current = value;
-          setLoadError(null);
-          setSaveNotice({
-            type: "success",
-            message:
-              "Saved a browser backup. Use Download to export the Markdown file.",
-          });
-          return true;
-        }
-
-        const response = await fetch("/__editor/save-chapter", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vol, arc, chapter, content: value }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Unable to save chapter through the dev server.");
-        }
-
+        await saveChapterContent(vol, arc, chapter, value);
+        await refreshCatalog();
         savedValueRef.current = value;
         setBackups(saveBackup(fileKey, value));
         setLoadError(null);
@@ -269,7 +251,7 @@ export function EditorPage() {
       }
 
       const message =
-        "Load a .md file before saving, or use Download to export.";
+        "Open a Firebase chapter before saving, or use Download to export.";
       setLoadError(message);
       setSaveNotice({ type: "error", message });
       return false;
@@ -281,7 +263,7 @@ export function EditorPage() {
       }
       return false;
     }
-  }, [arc, chapter, fileKey, fileName, value, vol]);
+  }, [arc, chapter, fileKey, fileName, refreshCatalog, value, vol]);
 
   const handleDownloadFile = () => {
     const blob = new Blob([value], { type: "text/markdown;charset=utf-8" });
@@ -357,7 +339,7 @@ export function EditorPage() {
             <h1 className="truncate text-2xl font-semibold">{fileName}</h1>
             {vol && arc && chapter ? (
               <p className="mt-1 text-sm text-muted-foreground">
-                {vol} / {arc} / {chapter}.md
+                {vol} / {arc} / {chapter}
               </p>
             ) : null}
           </div>
@@ -376,7 +358,7 @@ export function EditorPage() {
               variant="outline"
               onClick={handleLoadFileClick}>
               <Upload className="h-4 w-4" />
-              Load .md
+              Import .md
             </Button>
             <Button
               type="button"
@@ -384,9 +366,7 @@ export function EditorPage() {
               title={
                 hasWritableFile
                   ? "Save changes to the opened file"
-                  : CAN_SAVE_HOSTED_CHAPTER
-                    ? "Save changes to the current chapter"
-                    : "Save a browser backup"
+                  : "Save changes to the current Firebase chapter"
               }>
               <Save className="h-4 w-4" />
               Save
@@ -485,7 +465,7 @@ export function EditorPage() {
                 preview="edit"
                 height={680}
                 textareaProps={{
-                  placeholder: "Load a .md file or start writing Markdown...",
+                  placeholder: "Open a Firebase chapter or start writing Markdown...",
                 }}
               />
             </div>
