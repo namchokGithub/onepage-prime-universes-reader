@@ -446,10 +446,11 @@ export async function saveBackup(
   arc: string | undefined,
   chapter: string | undefined,
   content: string,
+  knownBackups?: Backup[],
 ) {
   if (!vol || !arc || !chapter) return [];
 
-  const currentBackups = await getBackups(vol, arc, chapter);
+  const currentBackups = knownBackups ?? [];
   if (currentBackups[0]?.content === content) return currentBackups;
 
   await setDoc(doc(backupCollectionReference(vol, arc, chapter)), {
