@@ -1,4 +1,4 @@
-import { FormEvent, MouseEvent, useEffect, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useState } from "react";
 import {
   User,
   onAuthStateChanged,
@@ -9,6 +9,7 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  Bookmark,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -46,6 +47,7 @@ import {
   reorderEntry as reorderContentEntry,
   ReorderDirection,
 } from "@/utils/contentRepository";
+import type { ReaderBookmark } from "@/store/useReaderStore";
 
 type EditorNavigationGuard = {
   hasUnsavedChanges: boolean;
@@ -228,6 +230,14 @@ function getDialogGuide(dialog: ManagementDialog) {
   ];
 }
 
+function readerScrollKey(vol: string, arc: string, chapter: string) {
+  return `reader-scroll:${vol}/${arc}/${chapter}`;
+}
+
+function formatBookmarkPercent(percent: number) {
+  return `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+}
+
 export type AppLayoutOutletContext = {
   catalog: Catalog;
   refreshCatalog: () => Promise<Catalog>;
@@ -249,6 +259,9 @@ export function AppLayout({
 
   const theme = useReaderStore((state) => state.theme);
   const toggleTheme = useReaderStore((state) => state.toggleTheme);
+  const bookmarks = useReaderStore((state) => state.bookmarks);
+  const updateBookmark = useReaderStore((state) => state.updateBookmark);
+  const removeBookmark = useReaderStore((state) => state.removeBookmark);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editorNavigationGuard, setEditorNavigationGuard] =
     useState<EditorNavigationGuard | null>(null);
@@ -298,6 +311,10 @@ export function AppLayout({
   const currentArc =
     currentVolume?.arcs.find((arc) => arc.id === activeArc) ??
     currentVolume?.arcs[0];
+  const readerBookmarks = useMemo(
+    () => [...bookmarks].sort((a, b) => b.updatedAt - a.updatedAt),
+    [bookmarks],
+  );
 
   useEffect(() => {
     if (!isFirebaseConfigured) return;
@@ -421,6 +438,73 @@ export function AppLayout({
     setPendingReadPath(path);
   };
 
+  const openReaderBookmark = (bookmark: ReaderBookmark) => {
+    const path = `/read/${bookmark.vol}/${bookmark.arc}/${bookmark.chapter}`;
+
+    setSidebarOpen(false);
+
+    // Keep the destination scroll outside the URL so shared chapter links stay
+    // clean while bookmark jumps still land on the saved local position.
+    if (location.pathname === path) {
+      window.scrollTo({ top: bookmark.scrollY, behavior: "smooth" });
+      localStorage.setItem(
+        readerScrollKey(bookmark.vol, bookmark.arc, bookmark.chapter),
+        String(bookmark.scrollY),
+      );
+      return;
+    }
+
+    navigate(path, { state: { bookmarkScrollY: bookmark.scrollY } });
+  };
+
+  const isBookmarkInEntry = (
+    bookmark: ReaderBookmark,
+    type: DeleteEntryType,
+    context: DeleteEntryContext | RenameEntryContext,
+  ) => {
+    if (type === "volume") return bookmark.vol === context.vol;
+    if (type === "arc") {
+      return bookmark.vol === context.vol && bookmark.arc === context.arc;
+    }
+
+    return (
+      bookmark.vol === context.vol &&
+      bookmark.arc === context.arc &&
+      bookmark.chapter === context.chapter
+    );
+  };
+
+  const removeLocalBookmarksForEntry = (
+    type: DeleteEntryType,
+    context: DeleteEntryContext,
+  ) => {
+    bookmarks
+      .filter((bookmark) => isBookmarkInEntry(bookmark, type, context))
+      .forEach((bookmark) => removeBookmark(bookmark.id));
+  };
+
+  const syncLocalBookmarksAfterRename = (
+    type: DeleteEntryType,
+    context: RenameEntryContext,
+    renamed: { vol?: string; arc?: string; chapter?: string },
+    title: string,
+  ) => {
+    // Editor rename creates new Firestore document ids, so local bookmarks must
+    // move to the new path or they will point to a deleted chapter route.
+    bookmarks
+      .filter((bookmark) => isBookmarkInEntry(bookmark, type, context))
+      .forEach((bookmark) => {
+        updateBookmark(bookmark.id, {
+          vol: renamed.vol || bookmark.vol,
+          arc: renamed.arc || bookmark.arc,
+          chapter: renamed.chapter || bookmark.chapter,
+          volumeTitle: type === "volume" ? title : bookmark.volumeTitle,
+          arcTitle: type === "arc" ? title : bookmark.arcTitle,
+          chapterTitle: type === "chapter" ? title : bookmark.chapterTitle,
+        });
+      });
+  };
+
   const continueWithoutSaving = () => {
     if (!pendingReadPath) return;
 
@@ -541,6 +625,7 @@ export function AppLayout({
         arc: context.arc,
         chapter: context.chapter,
       });
+      removeLocalBookmarksForEntry(type, context);
       await reloadToEditorPath(nextPath);
       return true;
     } catch (error) {
@@ -591,6 +676,7 @@ export function AppLayout({
         },
         title,
       );
+      syncLocalBookmarksAfterRename(type, context, renamed, title);
       await reloadToEditorPath(
         renamed.vol && renamed.arc && renamed.chapter
           ? `/editor/${renamed.vol}/${renamed.arc}/${renamed.chapter}`
@@ -944,6 +1030,51 @@ export function AppLayout({
               ) : null}
               <Separator className="mt-3" />
             </div>
+            {isReadRoute ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Bookmark className="h-3.5 w-3.5" />
+                  Bookmarks
+                </div>
+                {readerBookmarks.length === 0 ? (
+                  <p className="rounded-md border p-3 text-sm text-muted-foreground">
+                    No local bookmarks yet.
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {readerBookmarks.slice(0, 8).map((bookmark) => (
+                      <div
+                        key={bookmark.id}
+                        className="flex items-start gap-1 rounded-md border bg-background p-2">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => openReaderBookmark(bookmark)}
+                          title={`${bookmark.volumeTitle} / ${bookmark.arcTitle}`}>
+                          <span className="block truncate text-sm font-medium">
+                            {bookmark.chapterTitle}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            {formatBookmarkPercent(bookmark.percent)}
+                            {bookmark.note ? ` - ${bookmark.note}` : ""}
+                          </span>
+                        </button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeBookmark(bookmark.id)}
+                          aria-label="Delete bookmark">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Separator />
+              </div>
+            ) : null}
             {catalogError ? (
               <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                 {catalogError}

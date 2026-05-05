@@ -11,15 +11,52 @@ export type ReaderFontSize =
   | "xxx-large";
 export type ReaderLineHeight = "compact" | "normal" | "relaxed";
 
+export type ReaderBookmark = {
+  id: string;
+  vol: string;
+  arc: string;
+  chapter: string;
+  volumeTitle: string;
+  arcTitle: string;
+  chapterTitle: string;
+  scrollY: number;
+  percent: number;
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+// Drafts are used when creating a bookmark. The store owns ids and timestamps
+// so callers cannot accidentally duplicate persisted records.
+export type ReaderBookmarkDraft = Omit<
+  ReaderBookmark,
+  "id" | "createdAt" | "updatedAt"
+>;
+
 type ReaderState = {
   theme: ReaderTheme;
   fontSize: ReaderFontSize;
   lineHeight: ReaderLineHeight;
+  bookmarks: ReaderBookmark[];
   setTheme: (theme: ReaderTheme) => void;
   toggleTheme: () => void;
   setFontSize: (fontSize: ReaderFontSize) => void;
   setLineHeight: (lineHeight: ReaderLineHeight) => void;
+  addBookmark: (bookmark: ReaderBookmarkDraft) => string;
+  updateBookmark: (
+    id: string,
+    updates: Partial<Omit<ReaderBookmark, "id" | "createdAt">>,
+  ) => void;
+  removeBookmark: (id: string) => void;
 };
+
+function createBookmarkId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `bookmark-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export const useReaderStore = create<ReaderState>()(
   persist(
@@ -27,10 +64,50 @@ export const useReaderStore = create<ReaderState>()(
       theme: "light",
       fontSize: "medium",
       lineHeight: "normal",
+      bookmarks: [],
       setTheme: (theme) => set({ theme }),
-      toggleTheme: () => set((state) => ({ theme: state.theme === "light" ? "dark" : "light" })),
+      toggleTheme: () =>
+        set((state) => ({
+          theme: state.theme === "light" ? "dark" : "light",
+        })),
       setFontSize: (fontSize) => set({ fontSize }),
       setLineHeight: (lineHeight) => set({ lineHeight }),
+      addBookmark: (bookmark) => {
+        const now = Date.now();
+        const id = createBookmarkId();
+
+        set((state) => ({
+          bookmarks: [
+            {
+              ...bookmark,
+              id,
+              createdAt: now,
+              updatedAt: now,
+            },
+            ...state.bookmarks,
+          ],
+        }));
+
+        return id;
+      },
+      updateBookmark: (id, updates) => {
+        set((state) => ({
+          bookmarks: state.bookmarks.map((bookmark) =>
+            bookmark.id === id
+              ? {
+                  ...bookmark,
+                  ...updates,
+                  updatedAt: Date.now(),
+                }
+              : bookmark,
+          ),
+        }));
+      },
+      removeBookmark: (id) => {
+        set((state) => ({
+          bookmarks: state.bookmarks.filter((bookmark) => bookmark.id !== id),
+        }));
+      },
     }),
     {
       name: "onepage-reader-preferences",
