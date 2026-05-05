@@ -905,43 +905,43 @@ export function AppLayout({
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Library
                 </p>
-                {canUseEditorControls ? (
-                  <div className="flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => setIsArrangeDialogOpen(true)}
-                      disabled={isReordering}
-                      title="Arrange library order">
-                      Arrange
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => requestCreateEntry("volume")}
-                      disabled={isReordering}
-                      title="Add volume">
-                      <Plus className="h-3.5 w-3.5" />
-                      Vol
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => requestCreateEntry("arc")}
-                      disabled={isReordering}
-                      title="Add arc">
-                      <Plus className="h-3.5 w-3.5" />
-                      Arc
-                    </Button>
-                  </div>
-                ) : null}
               </div>
+              {canUseEditorControls ? (
+                <div className="mt-2 flex items-center gap-1 rounded-md bg-muted/60 p-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 flex-1 justify-start px-2"
+                    onClick={() => setIsArrangeDialogOpen(true)}
+                    disabled={isReordering}
+                    title="Arrange library order">
+                    Arrange
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => requestCreateEntry("volume")}
+                    disabled={isReordering}
+                    title="Add volume">
+                    <Plus className="h-3.5 w-3.5" />
+                    Vol
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => requestCreateEntry("arc")}
+                    disabled={isReordering}
+                    title="Add arc">
+                    <Plus className="h-3.5 w-3.5" />
+                    Arc
+                  </Button>
+                </div>
+              ) : null}
               <Separator className="mt-3" />
             </div>
             {catalogError ? (
