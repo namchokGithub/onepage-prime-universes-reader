@@ -76,10 +76,12 @@ npm run build
 
 ## &#x20;Roadmap
 
-- [ ] Bookmark system
-- [ ] Auto save editor
-- [ ] GitHub commit integration
-- [ ] Reading progress tracking
+- [x] Bookmark system
+- [x] Reading progress tracking
+- [ ] Continue reading
+- [ ] Search (in novel) ค้นคำในทั้งเรื่อง (client-side index)
+- [ ] Chapter navigation UX
+- [ ] Theme presets
 
 ---
 

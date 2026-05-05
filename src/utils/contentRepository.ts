@@ -471,11 +471,40 @@ export async function saveBackup(
   const currentBackups = knownBackups ?? [];
   if (currentBackups[0]?.content === content) return currentBackups;
 
-  await setDoc(doc(backupCollectionReference(vol, arc, chapter)), {
+  const timestamp = Date.now();
+  const backupRef = doc(backupCollectionReference(vol, arc, chapter));
+
+  await setDoc(backupRef, {
     content,
-    timestamp: Date.now(),
+    timestamp,
     createdAt: serverTimestamp(),
   });
+
+  if (knownBackups) {
+    const nextBackups = [
+      {
+        id: backupRef.id,
+        content,
+        timestamp,
+      },
+      ...knownBackups,
+    ];
+    const staleBackups = nextBackups.slice(MAX_BACKUPS);
+
+    // The editor already has the current backup list, so saving can avoid a
+    // follow-up Firestore query. Only old known backup ids are deleted.
+    if (staleBackups.length > 0) {
+      const batch = writeBatch(getFirebaseDb());
+      staleBackups.forEach((backup) => {
+        batch.delete(
+          doc(backupCollectionReference(vol, arc, chapter), backup.id),
+        );
+      });
+      await batch.commit();
+    }
+
+    return nextBackups.slice(0, MAX_BACKUPS);
+  }
 
   const snapshot = await getBackupSnapshots(vol, arc, chapter, MAX_BACKUPS + 10);
   const nextBackups = snapshot.docs.map((backupSnapshot) => {
