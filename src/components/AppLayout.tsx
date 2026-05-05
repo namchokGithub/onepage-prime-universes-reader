@@ -7,6 +7,8 @@ import {
   signOut,
 } from "firebase/auth";
 import {
+  ArrowDown,
+  ArrowUp,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -19,6 +21,7 @@ import {
   Save,
   Sun,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   NavLink,
@@ -40,6 +43,8 @@ import {
   getFirstEditorPath,
   getFirstReaderPath,
   renameEntry as renameContentEntry,
+  reorderEntry as reorderContentEntry,
+  ReorderDirection,
 } from "@/utils/contentRepository";
 
 type EditorNavigationGuard = {
@@ -252,6 +257,8 @@ export function AppLayout({
   const [managementDialog, setManagementDialog] =
     useState<ManagementDialog | null>(null);
   const [isManagementBusy, setIsManagementBusy] = useState(false);
+  const [isArrangeDialogOpen, setIsArrangeDialogOpen] = useState(false);
+  const [isReordering, setIsReordering] = useState(false);
   const [isEditorUnlocked, setIsEditorUnlocked] = useState(
     getStoredEditorPinAuth,
   );
@@ -637,6 +644,40 @@ export function AppLayout({
     if (didComplete) setManagementDialog(null);
   };
 
+  const reorderEntry = async (
+    type: CreateEntryType,
+    context: { vol?: string; arc?: string; chapter?: string },
+    direction: ReorderDirection,
+  ) => {
+    if (editorNavigationGuard?.hasUnsavedChanges) {
+      const didSave = await editorNavigationGuard.save();
+
+      if (!didSave) {
+        showMessage(
+          "Unable to save",
+          "Save the current chapter before reordering.",
+        );
+        return;
+      }
+    }
+
+    setIsReordering(true);
+    try {
+      const didReorder = await reorderContentEntry(
+        catalog,
+        type,
+        context,
+        direction,
+      );
+
+      if (didReorder) await refreshCatalog();
+    } catch (error) {
+      showMessage("Unable to reorder", (error as Error).message);
+    } finally {
+      setIsReordering(false);
+    }
+  };
+
   const submitEditorPin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -864,31 +905,43 @@ export function AppLayout({
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Library
                 </p>
-                {canUseEditorControls ? (
-                  <div className="flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => requestCreateEntry("volume")}
-                      title="Add volume">
-                      <Plus className="h-3.5 w-3.5" />
-                      Vol
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => requestCreateEntry("arc")}
-                      title="Add arc">
-                      <Plus className="h-3.5 w-3.5" />
-                      Arc
-                    </Button>
-                  </div>
-                ) : null}
               </div>
+              {canUseEditorControls ? (
+                <div className="mt-2 flex items-center gap-1 rounded-md bg-muted/60 p-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 flex-1 justify-start px-2"
+                    onClick={() => setIsArrangeDialogOpen(true)}
+                    disabled={isReordering}
+                    title="Arrange library order">
+                    Arrange
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => requestCreateEntry("volume")}
+                    disabled={isReordering}
+                    title="Add volume">
+                    <Plus className="h-3.5 w-3.5" />
+                    Vol
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2"
+                    onClick={() => requestCreateEntry("arc")}
+                    disabled={isReordering}
+                    title="Add arc">
+                    <Plus className="h-3.5 w-3.5" />
+                    Arc
+                  </Button>
+                </div>
+              ) : null}
               <Separator className="mt-3" />
             </div>
             {catalogError ? (
@@ -941,6 +994,7 @@ export function AppLayout({
                               label: volume.title,
                             })
                           }
+                          disabled={isReordering}
                           title="Rename volume">
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
@@ -955,6 +1009,7 @@ export function AppLayout({
                               label: volume.title,
                             })
                           }
+                          disabled={isReordering}
                           title="Delete volume">
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -989,6 +1044,7 @@ export function AppLayout({
                                     label: arc.title,
                                   })
                                 }
+                                disabled={isReordering}
                                 title="Rename arc">
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -1004,6 +1060,7 @@ export function AppLayout({
                                     label: arc.title,
                                   })
                                 }
+                                disabled={isReordering}
                                 title="Delete arc">
                                 <Trash2 className="h-3.5 w-3.5" />
                               </Button>
@@ -1046,6 +1103,7 @@ export function AppLayout({
                                         label: chapter.title,
                                       })
                                     }
+                                    disabled={isReordering}
                                     title="Rename chapter">
                                     <Pencil className="h-3.5 w-3.5" />
                                   </Button>
@@ -1062,6 +1120,7 @@ export function AppLayout({
                                         label: chapter.title,
                                       })
                                     }
+                                    disabled={isReordering}
                                     title="Delete chapter">
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
@@ -1075,6 +1134,7 @@ export function AppLayout({
                               variant="ghost"
                               size="sm"
                               className="h-8 w-full justify-start px-3 text-muted-foreground"
+                              disabled={isReordering}
                               onClick={() =>
                                 requestCreateEntry("chapter", {
                                   vol: volume.id,
@@ -1268,6 +1328,346 @@ export function AppLayout({
               </Button>
             </div>
           </form>
+        </div>
+      ) : null}
+      {isArrangeDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:px-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="arrange-dialog-title"
+            className="flex max-h-[100dvh] w-full flex-col rounded-t-md border bg-card text-card-foreground shadow-xl sm:max-h-[min(760px,calc(100vh-2rem))] sm:max-w-3xl sm:rounded-md">
+            <div className="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-5">
+              <div className="min-w-0">
+                <h2
+                  id="arrange-dialog-title"
+                  className="text-lg font-semibold">
+                  Arrange library
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Volumes, arcs, and chapters
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => setIsArrangeDialogOpen(false)}
+                aria-label="Close arrange dialog">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-5 sm:py-4">
+              {catalog.volumes.length === 0 ? (
+                <p className="rounded-md border p-3 text-sm text-muted-foreground">
+                  Add chapters in Firebase to populate the library.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {catalog.volumes.map((volume, volumeIndex) => (
+                    <div
+                      key={volume.id}
+                      className="rounded-md border bg-background">
+                      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 sm:flex-nowrap">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Volume
+                          </p>
+                          <p className="mt-0.5 break-words font-medium">
+                            {volume.title}
+                          </p>
+                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground"
+                            onClick={() =>
+                              void reorderEntry(
+                                "volume",
+                                { vol: volume.id },
+                                "up",
+                              )
+                            }
+                            disabled={isReordering || volumeIndex === 0}
+                            title="Move volume up">
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground"
+                            onClick={() =>
+                              void reorderEntry(
+                                "volume",
+                                { vol: volume.id },
+                                "down",
+                              )
+                            }
+                            disabled={
+                              isReordering ||
+                              volumeIndex === catalog.volumes.length - 1
+                            }
+                            title="Move volume down">
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground"
+                            onClick={() => {
+                              setIsArrangeDialogOpen(false);
+                              requestRenameEntry("volume", {
+                                vol: volume.id,
+                                arc:
+                                  volume.id === activeVol
+                                    ? activeArc
+                                    : volume.arcs[0]?.id,
+                                chapter:
+                                  volume.id === activeVol
+                                    ? activeChapter
+                                    : volume.arcs[0]?.chapters[0]?.chapter,
+                                label: volume.title,
+                              });
+                            }}
+                            disabled={isReordering}
+                            title="Rename volume">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => {
+                              setIsArrangeDialogOpen(false);
+                              requestDeleteEntry("volume", {
+                                vol: volume.id,
+                                label: volume.title,
+                              });
+                            }}
+                            disabled={isReordering}
+                            title="Delete volume">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 px-3 py-3">
+                        {volume.arcs.map((arc, arcIndex) => (
+                          <div key={arc.id} className="space-y-2">
+                            <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                  Arc
+                                </p>
+                                <p className="mt-0.5 break-words text-sm text-muted-foreground">
+                                  {arc.title}
+                                </p>
+                              </div>
+                              <div className="ml-auto flex shrink-0 items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground"
+                                  onClick={() =>
+                                    void reorderEntry(
+                                      "arc",
+                                      {
+                                        vol: volume.id,
+                                        arc: arc.id,
+                                      },
+                                      "up",
+                                    )
+                                  }
+                                  disabled={isReordering || arcIndex === 0}
+                                  title="Move arc up">
+                                  <ArrowUp className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground"
+                                  onClick={() =>
+                                    void reorderEntry(
+                                      "arc",
+                                      {
+                                        vol: volume.id,
+                                        arc: arc.id,
+                                      },
+                                      "down",
+                                    )
+                                  }
+                                  disabled={
+                                    isReordering ||
+                                    arcIndex === volume.arcs.length - 1
+                                  }
+                                  title="Move arc down">
+                                  <ArrowDown className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground"
+                                  onClick={() => {
+                                    setIsArrangeDialogOpen(false);
+                                    requestRenameEntry("arc", {
+                                      vol: volume.id,
+                                      arc: arc.id,
+                                      chapter:
+                                        volume.id === activeVol &&
+                                        arc.id === activeArc
+                                          ? activeChapter
+                                          : arc.chapters[0]?.chapter,
+                                      label: arc.title,
+                                    });
+                                  }}
+                                  disabled={isReordering}
+                                  title="Rename arc">
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  onClick={() => {
+                                    setIsArrangeDialogOpen(false);
+                                    requestDeleteEntry("arc", {
+                                      vol: volume.id,
+                                      arc: arc.id,
+                                      label: arc.title,
+                                    });
+                                  }}
+                                  disabled={isReordering}
+                                  title="Delete arc">
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1 pl-3 sm:pl-5">
+                              {arc.chapters.map((chapter, chapterIndex) => (
+                                <div
+                                  key={`${chapter.vol}-${chapter.arc}-${chapter.chapter}`}
+                                  className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent/60 sm:flex-nowrap">
+                                  <p className="min-w-0 flex-1 break-words text-sm">
+                                    {chapter.title}
+                                  </p>
+                                  <div className="ml-auto flex shrink-0 items-center gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-muted-foreground"
+                                      onClick={() =>
+                                        void reorderEntry(
+                                          "chapter",
+                                          {
+                                            vol: chapter.vol,
+                                            arc: chapter.arc,
+                                            chapter: chapter.chapter,
+                                          },
+                                          "up",
+                                        )
+                                      }
+                                      disabled={
+                                        isReordering || chapterIndex === 0
+                                      }
+                                      title="Move chapter up">
+                                      <ArrowUp className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-muted-foreground"
+                                      onClick={() =>
+                                        void reorderEntry(
+                                          "chapter",
+                                          {
+                                            vol: chapter.vol,
+                                            arc: chapter.arc,
+                                            chapter: chapter.chapter,
+                                          },
+                                          "down",
+                                        )
+                                      }
+                                      disabled={
+                                        isReordering ||
+                                        chapterIndex ===
+                                          arc.chapters.length - 1
+                                      }
+                                      title="Move chapter down">
+                                      <ArrowDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-muted-foreground"
+                                      onClick={() => {
+                                        setIsArrangeDialogOpen(false);
+                                        requestRenameEntry("chapter", {
+                                          vol: chapter.vol,
+                                          arc: chapter.arc,
+                                          chapter: chapter.chapter,
+                                          label: chapter.title,
+                                        });
+                                      }}
+                                      disabled={isReordering}
+                                      title="Rename chapter">
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                      onClick={() => {
+                                        setIsArrangeDialogOpen(false);
+                                        requestDeleteEntry("chapter", {
+                                          vol: chapter.vol,
+                                          arc: chapter.arc,
+                                          chapter: chapter.chapter,
+                                          label: chapter.title,
+                                        });
+                                      }}
+                                      disabled={isReordering}
+                                      title="Delete chapter">
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t px-4 py-3 sm:flex-row sm:justify-end sm:px-5">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsArrangeDialogOpen(false)}
+                disabled={isReordering}>
+                Done
+              </Button>
+            </div>
+          </section>
         </div>
       ) : null}
       {managementDialog ? (

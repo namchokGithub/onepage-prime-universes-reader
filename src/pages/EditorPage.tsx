@@ -77,6 +77,8 @@ const IntlWithSegmenter = Intl as typeof Intl & {
   ) => IntlWordSegmenter;
 };
 
+const UNTITLED_CHAPTER = "Untitled chapter";
+
 function countWords(text: string) {
   const trimmedText = text.trim();
 
@@ -97,11 +99,11 @@ function countWords(text: string) {
 
 export function EditorPage() {
   const { vol, arc, chapter } = useParams();
-  const { catalog, refreshCatalog, setEditorNavigationGuard } =
+  const { catalog, setEditorNavigationGuard } =
     useOutletContext<AppLayoutOutletContext>();
   const theme = useReaderStore((state) => state.theme);
   const [value, setValue] = useState<string>("");
-  const [fileName, setFileName] = useState("Untitled chapter");
+  const [fileName, setFileName] = useState(UNTITLED_CHAPTER);
   const [backups, setBackups] = useState<Backup[]>([]);
   const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -114,6 +116,22 @@ export function EditorPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const fileHandleRef = useRef<MarkdownFileHandle | null>(null);
   const savedValueRef = useRef("");
+  const chapterTitle = useMemo(
+    () =>
+      vol && arc && chapter
+        ? getChapterTitle(catalog, vol, arc, chapter)
+        : UNTITLED_CHAPTER,
+    [arc, catalog, chapter, vol],
+  );
+  const chapterTitleRef = useRef(chapterTitle);
+
+  useEffect(() => {
+    chapterTitleRef.current = chapterTitle;
+
+    if (!vol || !arc || !chapter || fileHandleRef.current) return;
+
+    setFileName(`${chapterTitle}.md`);
+  }, [arc, chapter, chapterTitle, vol]);
 
   useEffect(() => {
     let active = true;
@@ -147,7 +165,7 @@ export function EditorPage() {
         if (!active) return;
         fileHandleRef.current = null;
         setHasWritableFile(false);
-        setFileName(`${getChapterTitle(catalog, vol, arc, chapter)}.md`);
+        setFileName(`${chapterTitleRef.current}.md`);
         savedValueRef.current = content;
         setValue(content);
       })
@@ -156,7 +174,7 @@ export function EditorPage() {
         fileHandleRef.current = null;
         setHasWritableFile(false);
         setLoadError(error.message);
-        setFileName("Untitled chapter");
+        setFileName(UNTITLED_CHAPTER);
         savedValueRef.current = "";
         setValue("");
       });
@@ -164,7 +182,7 @@ export function EditorPage() {
     return () => {
       active = false;
     };
-  }, [arc, catalog, chapter, vol]);
+  }, [arc, chapter, vol]);
 
   useEffect(() => {
     if (!saveNotice) return;
@@ -176,10 +194,7 @@ export function EditorPage() {
     return () => window.clearTimeout(noticeTimer);
   }, [saveNotice]);
 
-  const wordCount = useMemo(
-    () => countWords(value),
-    [value],
-  );
+  const wordCount = useMemo(() => countWords(value), [value]);
 
   const handleFileLoad = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -253,10 +268,15 @@ export function EditorPage() {
       }
 
       if (vol && arc && chapter) {
+        if (value === savedValueRef.current) {
+          setLoadError(null);
+          setSaveNotice({ type: "success", message: "No changes to save." });
+          return true;
+        }
+
         await saveChapterContent(vol, arc, chapter, value);
-        await refreshCatalog();
         savedValueRef.current = value;
-        setBackups(await saveBackup(vol, arc, chapter, value));
+        setBackups(await saveBackup(vol, arc, chapter, value, backups));
         setSelectedBackupIndex(0);
         setLoadError(null);
         setSaveNotice({ type: "success", message: `Saved ${fileName}` });
@@ -276,7 +296,7 @@ export function EditorPage() {
       }
       return false;
     }
-  }, [arc, chapter, fileName, refreshCatalog, value, vol]);
+  }, [arc, backups, chapter, fileName, value, vol]);
 
   const handleDownloadFile = () => {
     const blob = new Blob([value], { type: "text/markdown;charset=utf-8" });
@@ -296,29 +316,13 @@ export function EditorPage() {
     setSelectedBackupIndex(index);
   };
 
-  const handleSelectBackup = (index: number) => {
+  const requestBackupContent = (index: number) => {
     const restoredContent = backups[index]?.content ?? null;
 
     if (restoredContent === null) return;
 
     if (value !== savedValueRef.current) {
       setPendingBackupConfirm({ index, content: restoredContent });
-      return;
-    }
-
-    applyBackupContent(restoredContent, index);
-  };
-
-  const handleRestoreBackup = (index: number) => {
-    const restoredContent = backups[index]?.content ?? null;
-
-    if (restoredContent === null) return;
-
-    if (value !== savedValueRef.current) {
-      setPendingBackupConfirm({
-        index,
-        content: restoredContent,
-      });
       return;
     }
 
@@ -407,8 +411,8 @@ export function EditorPage() {
               backups={backups}
               isLoading={isBackupLoading}
               selectedIndex={selectedBackupIndex}
-              onSelect={handleSelectBackup}
-              onRestore={handleRestoreBackup}
+              onSelect={requestBackupContent}
+              onRestore={requestBackupContent}
             />
           </div>
         </div>

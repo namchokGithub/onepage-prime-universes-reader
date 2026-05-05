@@ -37,6 +37,8 @@ export type Catalog = {
 
 export type CreateEntryType = "volume" | "arc" | "chapter";
 
+export type ReorderDirection = "up" | "down";
+
 export type CreatedEntry = {
   vol: string;
   arc: string;
@@ -249,6 +251,22 @@ function sortByOrderThenId<T extends { id: string; order: number }>(items: T[]) 
   });
 }
 
+function moveItem<T>(items: T[], index: number, direction: ReorderDirection) {
+  const nextIndex = direction === "up" ? index - 1 : index + 1;
+
+  if (index < 0 || nextIndex < 0 || nextIndex >= items.length) {
+    return null;
+  }
+
+  const nextItems = [...items];
+  [nextItems[index], nextItems[nextIndex]] = [
+    nextItems[nextIndex],
+    nextItems[index],
+  ];
+
+  return nextItems;
+}
+
 function normalizeChapterDocument(data: Partial<ChapterDocument>) {
   const volId = data.volId ?? "";
   const arcId = data.arcId ?? "";
@@ -446,10 +464,11 @@ export async function saveBackup(
   arc: string | undefined,
   chapter: string | undefined,
   content: string,
+  knownBackups?: Backup[],
 ) {
   if (!vol || !arc || !chapter) return [];
 
-  const currentBackups = await getBackups(vol, arc, chapter);
+  const currentBackups = knownBackups ?? [];
   if (currentBackups[0]?.content === content) return currentBackups;
 
   await setDoc(doc(backupCollectionReference(vol, arc, chapter)), {
@@ -749,4 +768,120 @@ export async function renameEntry(
     arc: type === "arc" && nextArc ? nextArc : (context.arc ?? ""),
     chapter: context.chapter ?? "",
   };
+}
+
+export async function reorderEntry(
+  catalog: Catalog,
+  type: CreateEntryType,
+  context: { vol?: string; arc?: string; chapter?: string },
+  direction: ReorderDirection,
+) {
+  const db = getFirebaseDb();
+  const batch = writeBatch(db);
+
+  if (type === "volume") {
+    if (!context.vol) throw new Error("Missing volume to reorder");
+
+    const currentIndex = catalog.volumes.findIndex(
+      (volume) => volume.id === context.vol,
+    );
+    const reorderedVolumes = moveItem(catalog.volumes, currentIndex, direction);
+    if (!reorderedVolumes) return false;
+
+    const affectedVolumeIds = new Set([context.vol]);
+    affectedVolumeIds.add(reorderedVolumes[currentIndex].id);
+
+    for (const volumeId of affectedVolumeIds) {
+      const nextOrder =
+        reorderedVolumes.findIndex((volume) => volume.id === volumeId) + 1;
+      const snapshot = await getDocs(
+        query(collection(db, CHAPTERS_COLLECTION), where("volId", "==", volumeId)),
+      );
+
+      snapshot.forEach((chapterSnapshot) => {
+        batch.update(chapterSnapshot.ref, {
+          volOrder: nextOrder,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    }
+
+    await batch.commit();
+    return true;
+  }
+
+  const volume = catalog.volumes.find((volume) => volume.id === context.vol);
+  if (!volume) throw new Error("Missing volume to reorder");
+
+  if (type === "arc") {
+    if (!context.arc) throw new Error("Missing arc to reorder");
+
+    const currentIndex = volume.arcs.findIndex((arc) => arc.id === context.arc);
+    const reorderedArcs = moveItem(volume.arcs, currentIndex, direction);
+    if (!reorderedArcs) return false;
+
+    const affectedArcIds = new Set([context.arc]);
+    affectedArcIds.add(reorderedArcs[currentIndex].id);
+
+    for (const arcId of affectedArcIds) {
+      const nextOrder = reorderedArcs.findIndex((arc) => arc.id === arcId) + 1;
+      const snapshot = await getDocs(
+        query(
+          collection(db, CHAPTERS_COLLECTION),
+          where("volId", "==", volume.id),
+          where("arcId", "==", arcId),
+        ),
+      );
+
+      snapshot.forEach((chapterSnapshot) => {
+        batch.update(chapterSnapshot.ref, {
+          arcOrder: nextOrder,
+          updatedAt: serverTimestamp(),
+        });
+      });
+    }
+
+    await batch.commit();
+    return true;
+  }
+
+  if (!context.arc || !context.chapter) {
+    throw new Error("Missing chapter to reorder");
+  }
+
+  const arc = volume.arcs.find((arc) => arc.id === context.arc);
+  if (!arc) throw new Error("Missing arc to reorder");
+
+  const currentIndex = arc.chapters.findIndex(
+    (chapter) => chapter.chapter === context.chapter,
+  );
+  const reorderedChapters = moveItem(arc.chapters, currentIndex, direction);
+  if (!reorderedChapters) return false;
+
+  const affectedChapters = [
+    arc.chapters[currentIndex],
+    reorderedChapters[currentIndex],
+  ];
+
+  affectedChapters.forEach((chapterItem) => {
+    const nextOrder =
+      reorderedChapters.findIndex(
+        (item) => item.chapter === chapterItem.chapter,
+      ) + 1;
+
+    batch.update(
+      doc(
+        db,
+        CHAPTERS_COLLECTION,
+        documentId(chapterItem.vol, chapterItem.arc, chapterItem.chapter),
+      ),
+      {
+        chapterOrder: nextOrder,
+        updatedAt: serverTimestamp(),
+      },
+    );
+  });
+
+  await batch.commit();
+  return true;
 }
