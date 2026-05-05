@@ -11,6 +11,7 @@ import {
   ArrowUp,
   Bookmark,
   BookOpen,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FilePenLine,
@@ -18,6 +19,7 @@ import {
   Menu,
   Moon,
   Pencil,
+  PlayCircle,
   Plus,
   Save,
   Sun,
@@ -47,7 +49,7 @@ import {
   reorderEntry as reorderContentEntry,
   ReorderDirection,
 } from "@/utils/contentRepository";
-import type { ReaderBookmark } from "@/store/useReaderStore";
+import type { ReaderBookmark, ReaderProgress } from "@/store/useReaderStore";
 
 type EditorNavigationGuard = {
   hasUnsavedChanges: boolean;
@@ -238,6 +240,8 @@ function formatBookmarkPercent(percent: number) {
   return `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
 }
 
+const COMPLETED_PROGRESS_PERCENT = 95;
+
 export type AppLayoutOutletContext = {
   catalog: Catalog;
   refreshCatalog: () => Promise<Catalog>;
@@ -260,6 +264,13 @@ export function AppLayout({
   const theme = useReaderStore((state) => state.theme);
   const toggleTheme = useReaderStore((state) => state.toggleTheme);
   const bookmarks = useReaderStore((state) => state.bookmarks);
+  const readingProgress = useReaderStore((state) => state.readingProgress);
+  const updateReadingProgress = useReaderStore(
+    (state) => state.updateReadingProgress,
+  );
+  const clearReadingProgress = useReaderStore(
+    (state) => state.clearReadingProgress,
+  );
   const updateBookmark = useReaderStore((state) => state.updateBookmark);
   const removeBookmark = useReaderStore((state) => state.removeBookmark);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -315,6 +326,67 @@ export function AppLayout({
     () => [...bookmarks].sort((a, b) => b.updatedAt - a.updatedAt),
     [bookmarks],
   );
+  const orderedChapters = useMemo(
+    () =>
+      catalog.volumes.flatMap((volume) =>
+        volume.arcs.flatMap((arc) =>
+          arc.chapters.map((chapter) => ({
+            ...chapter,
+            volumeTitle: volume.title,
+            arcTitle: arc.title,
+            chapterTitle: chapter.title,
+          })),
+        ),
+      ),
+    [catalog],
+  );
+  const continueReadingTarget = useMemo(() => {
+    if (!readingProgress) return null;
+
+    const isCompleted =
+      readingProgress.percent >= COMPLETED_PROGRESS_PERCENT;
+    if (!isCompleted) {
+      return {
+        ...readingProgress,
+        buttonLabel: "Continue",
+        isCompleted: false,
+        isFinalCompleted: false,
+      };
+    }
+
+    const currentIndex = orderedChapters.findIndex(
+      (chapter) =>
+        chapter.vol === readingProgress.vol &&
+        chapter.arc === readingProgress.arc &&
+        chapter.chapter === readingProgress.chapter,
+    );
+    const nextChapter =
+      currentIndex >= 0 ? orderedChapters[currentIndex + 1] : undefined;
+
+    if (!nextChapter) {
+      return {
+        ...readingProgress,
+        buttonLabel: "Completed",
+        isCompleted: true,
+        isFinalCompleted: true,
+      };
+    }
+
+    return {
+      vol: nextChapter.vol,
+      arc: nextChapter.arc,
+      chapter: nextChapter.chapter,
+      volumeTitle: nextChapter.volumeTitle,
+      arcTitle: nextChapter.arcTitle,
+      chapterTitle: nextChapter.chapterTitle,
+      scrollY: 0,
+      percent: 0,
+      updatedAt: readingProgress.updatedAt,
+      buttonLabel: "Continue",
+      isCompleted: true,
+      isFinalCompleted: false,
+    };
+  }, [orderedChapters, readingProgress]);
 
   useEffect(() => {
     if (!isFirebaseConfigured) return;
@@ -457,6 +529,44 @@ export function AppLayout({
     navigate(path, { state: { bookmarkScrollY: bookmark.scrollY } });
   };
 
+  const openContinueReading = () => {
+    if (!continueReadingTarget || continueReadingTarget.isFinalCompleted) {
+      return;
+    }
+
+    const path = `/read/${continueReadingTarget.vol}/${continueReadingTarget.arc}/${continueReadingTarget.chapter}`;
+
+    setSidebarOpen(false);
+
+    if (location.pathname === path) {
+      window.scrollTo({
+        top: continueReadingTarget.scrollY,
+        behavior: "smooth",
+      });
+      localStorage.setItem(
+        readerScrollKey(
+          continueReadingTarget.vol,
+          continueReadingTarget.arc,
+          continueReadingTarget.chapter,
+        ),
+        String(continueReadingTarget.scrollY),
+      );
+      return;
+    }
+
+    localStorage.setItem(
+      readerScrollKey(
+        continueReadingTarget.vol,
+        continueReadingTarget.arc,
+        continueReadingTarget.chapter,
+      ),
+      String(continueReadingTarget.scrollY),
+    );
+    navigate(path, {
+      state: { bookmarkScrollY: continueReadingTarget.scrollY },
+    });
+  };
+
   const isBookmarkInEntry = (
     bookmark: ReaderBookmark,
     type: DeleteEntryType,
@@ -474,6 +584,23 @@ export function AppLayout({
     );
   };
 
+  const isProgressInEntry = (
+    progress: ReaderProgress,
+    type: DeleteEntryType,
+    context: DeleteEntryContext | RenameEntryContext,
+  ) => {
+    if (type === "volume") return progress.vol === context.vol;
+    if (type === "arc") {
+      return progress.vol === context.vol && progress.arc === context.arc;
+    }
+
+    return (
+      progress.vol === context.vol &&
+      progress.arc === context.arc &&
+      progress.chapter === context.chapter
+    );
+  };
+
   const removeLocalBookmarksForEntry = (
     type: DeleteEntryType,
     context: DeleteEntryContext,
@@ -481,6 +608,10 @@ export function AppLayout({
     bookmarks
       .filter((bookmark) => isBookmarkInEntry(bookmark, type, context))
       .forEach((bookmark) => removeBookmark(bookmark.id));
+
+    if (readingProgress && isProgressInEntry(readingProgress, type, context)) {
+      clearReadingProgress();
+    }
   };
 
   const syncLocalBookmarksAfterRename = (
@@ -503,6 +634,20 @@ export function AppLayout({
           chapterTitle: type === "chapter" ? title : bookmark.chapterTitle,
         });
       });
+
+    if (readingProgress && isProgressInEntry(readingProgress, type, context)) {
+      updateReadingProgress({
+        vol: renamed.vol || readingProgress.vol,
+        arc: renamed.arc || readingProgress.arc,
+        chapter: renamed.chapter || readingProgress.chapter,
+        volumeTitle: type === "volume" ? title : readingProgress.volumeTitle,
+        arcTitle: type === "arc" ? title : readingProgress.arcTitle,
+        chapterTitle:
+          type === "chapter" ? title : readingProgress.chapterTitle,
+        scrollY: readingProgress.scrollY,
+        percent: readingProgress.percent,
+      });
+    }
   };
 
   const continueWithoutSaving = () => {
@@ -1032,6 +1177,54 @@ export function AppLayout({
             </div>
             {isReadRoute ? (
               <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <PlayCircle className="h-3.5 w-3.5" />
+                  Continue reading
+                </div>
+                {continueReadingTarget ? (
+                  <div className="rounded-md border bg-background p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">
+                        {continueReadingTarget.arcTitle}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {continueReadingTarget.chapterTitle}
+                      </p>
+                    </div>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-[linear-gradient(90deg,#ef4444,#f97316,#eab308,#22c55e,#06b6d4,#3b82f6,#8b5cf6,#ec4899)] transition-[width] duration-150"
+                        style={{
+                          width: `${continueReadingTarget.isCompleted ? 100 : continueReadingTarget.percent}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                        {continueReadingTarget.isCompleted ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                        ) : null}
+                        {continueReadingTarget.isCompleted
+                          ? "Completed"
+                          : formatBookmarkPercent(continueReadingTarget.percent)}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 shrink-0 px-3"
+                        onClick={openContinueReading}
+                        disabled={continueReadingTarget.isFinalCompleted}>
+                        {continueReadingTarget.buttonLabel}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="rounded-md border p-3 text-sm text-muted-foreground">
+                    Start reading to save your place.
+                  </p>
+                )}
+                <Separator />
+
                 <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   <Bookmark className="h-3.5 w-3.5" />
                   Bookmarks

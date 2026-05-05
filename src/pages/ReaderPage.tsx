@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useMemo, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-markdown-preview/markdown.css";
 import {
@@ -227,6 +227,9 @@ export function ReaderPage() {
   const addBookmark = useReaderStore((state) => state.addBookmark);
   const updateBookmark = useReaderStore((state) => state.updateBookmark);
   const removeBookmark = useReaderStore((state) => state.removeBookmark);
+  const saveReadingProgress = useReaderStore(
+    (state) => state.updateReadingProgress,
+  );
   const [isPreferencePanelOpen, setIsPreferencePanelOpen] = useState(false);
   const [isBookmarkPanelOpen, setIsBookmarkPanelOpen] = useState(false);
   const [editingBookmarkId, setEditingBookmarkId] = useState<string | null>(
@@ -235,7 +238,13 @@ export function ReaderPage() {
   const [bookmarkNote, setBookmarkNote] = useState("");
   const [hasScrolledPastHeader, setHasScrolledPastHeader] = useState(false);
   const [readingPercent, setReadingPercent] = useState(0);
+  const lastProgressSaveRef = useRef({ percent: -1, savedAt: 0 });
 
+  const chapterKey = useMemo(
+    () => `${vol}/${arc}/${chapter}`,
+    [arc, chapter, vol],
+  );
+  const [loadedChapterKey, setLoadedChapterKey] = useState("");
   const scrollKey = useMemo(
     () => readerScrollKey(vol, arc, chapter),
     [vol, arc, chapter],
@@ -274,11 +283,13 @@ export function ReaderPage() {
     let active = true;
     setLoading(true);
     setError(null);
+    setLoadedChapterKey("");
 
     fetchChapter(vol, arc, chapter)
       .then((text) => {
         if (!active) return;
         setContent(text);
+        setLoadedChapterKey(chapterKey);
       })
       .catch((err: Error) => {
         if (!active) return;
@@ -292,10 +303,10 @@ export function ReaderPage() {
     return () => {
       active = false;
     };
-  }, [vol, arc, chapter]);
+  }, [arc, chapter, chapterKey, vol]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || loadedChapterKey !== chapterKey) return;
     const savedScroll = Number(localStorage.getItem(scrollKey) ?? "0");
     const targetScroll = bookmarkScrollY ?? savedScroll;
 
@@ -317,9 +328,19 @@ export function ReaderPage() {
       window.removeEventListener("beforeunload", saveScroll);
       window.removeEventListener("pagehide", saveScroll);
     };
-  }, [bookmarkScrollY, loading, location.pathname, navigate, scrollKey]);
+  }, [
+    bookmarkScrollY,
+    chapterKey,
+    loadedChapterKey,
+    loading,
+    location.pathname,
+    navigate,
+    scrollKey,
+  ]);
 
   useEffect(() => {
+    if (loading || loadedChapterKey !== chapterKey) return;
+
     const updateReadingProgress = () => {
       const currentPosition = getCurrentReadingPosition();
 
@@ -327,6 +348,28 @@ export function ReaderPage() {
       // saved positions and visible progress stay aligned.
       setReadingPercent(currentPosition.percent);
       setHasScrolledPastHeader(window.scrollY > 180);
+      const now = Date.now();
+      const lastSave = lastProgressSaveRef.current;
+      const shouldPersistProgress =
+        currentPosition.percent !== lastSave.percent &&
+        (now - lastSave.savedAt > 500 || currentPosition.percent >= 95);
+
+      if (!shouldPersistProgress) return;
+
+      lastProgressSaveRef.current = {
+        percent: currentPosition.percent,
+        savedAt: now,
+      };
+      saveReadingProgress({
+        vol,
+        arc,
+        chapter,
+        volumeTitle: readerHeader.volumeTitle,
+        arcTitle: readerHeader.arcTitle,
+        chapterTitle: readerHeader.chapterTitle,
+        scrollY: currentPosition.scrollY,
+        percent: currentPosition.percent,
+      });
     };
 
     updateReadingProgress();
@@ -339,7 +382,18 @@ export function ReaderPage() {
       window.removeEventListener("scroll", updateReadingProgress);
       window.removeEventListener("resize", updateReadingProgress);
     };
-  }, []);
+  }, [
+    arc,
+    chapter,
+    chapterKey,
+    loadedChapterKey,
+    loading,
+    readerHeader.arcTitle,
+    readerHeader.chapterTitle,
+    readerHeader.volumeTitle,
+    saveReadingProgress,
+    vol,
+  ]);
 
   const openAddBookmark = () => {
     setEditingBookmarkId(null);

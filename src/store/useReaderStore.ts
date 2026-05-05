@@ -33,15 +33,32 @@ export type ReaderBookmarkDraft = Omit<
   "id" | "createdAt" | "updatedAt"
 >;
 
+export type ReaderProgress = {
+  vol: string;
+  arc: string;
+  chapter: string;
+  volumeTitle: string;
+  arcTitle: string;
+  chapterTitle: string;
+  scrollY: number;
+  percent: number;
+  updatedAt: number;
+};
+
+export type ReaderProgressDraft = Omit<ReaderProgress, "updatedAt">;
+
 type ReaderState = {
   theme: ReaderTheme;
   fontSize: ReaderFontSize;
   lineHeight: ReaderLineHeight;
   bookmarks: ReaderBookmark[];
+  readingProgress: ReaderProgress | null;
   setTheme: (theme: ReaderTheme) => void;
   toggleTheme: () => void;
   setFontSize: (fontSize: ReaderFontSize) => void;
   setLineHeight: (lineHeight: ReaderLineHeight) => void;
+  updateReadingProgress: (progress: ReaderProgressDraft) => void;
+  clearReadingProgress: () => void;
   addBookmark: (bookmark: ReaderBookmarkDraft) => string;
   updateBookmark: (
     id: string,
@@ -65,6 +82,7 @@ export const useReaderStore = create<ReaderState>()(
       fontSize: "medium",
       lineHeight: "normal",
       bookmarks: [],
+      readingProgress: null,
       setTheme: (theme) => set({ theme }),
       toggleTheme: () =>
         set((state) => ({
@@ -72,6 +90,15 @@ export const useReaderStore = create<ReaderState>()(
         })),
       setFontSize: (fontSize) => set({ fontSize }),
       setLineHeight: (lineHeight) => set({ lineHeight }),
+      updateReadingProgress: (progress) => {
+        set({
+          readingProgress: {
+            ...progress,
+            updatedAt: Date.now(),
+          },
+        });
+      },
+      clearReadingProgress: () => set({ readingProgress: null }),
       addBookmark: (bookmark) => {
         const now = Date.now();
         const id = createBookmarkId();

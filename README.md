@@ -78,7 +78,7 @@ npm run build
 
 - [x] Bookmark system
 - [x] Reading progress tracking
-- [ ] Continue reading
+- [x] Continue reading
 - [ ] Search (in novel) ค้นคำในทั้งเรื่อง (client-side index)
 - [ ] Chapter navigation UX
 - [ ] Theme presets
