@@ -472,7 +472,7 @@ export function EditorPage() {
               </span>
             </div>
 
-            <div data-color-mode={theme}>
+            <div data-color-mode={theme === "night" ? "dark" : "light"}>
               <MDEditor
                 id="markdown-editor"
                 value={value}
@@ -495,10 +495,10 @@ export function EditorPage() {
                 <Label>Preview</Label>
               </div>
               <div
-                data-color-mode={theme}
+                data-color-mode={theme === "night" ? "dark" : "light"}
                 className={cn(
                   "min-h-[680px] p-6",
-                  theme === "dark" ? "bg-[#0d1117]" : "bg-white",
+                  theme === "night" ? "bg-[#0d1117]" : "bg-card",
                 )}>
                 {value.trim() ? (
                   <MDEditor.Markdown

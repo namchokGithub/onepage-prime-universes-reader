@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type ReaderTheme = "light" | "dark";
+export type ReaderTheme = "paper" | "night" | "mint";
 export type ReaderFontSize =
   | "small"
   | "medium"
@@ -33,15 +33,32 @@ export type ReaderBookmarkDraft = Omit<
   "id" | "createdAt" | "updatedAt"
 >;
 
+export type ReaderProgress = {
+  vol: string;
+  arc: string;
+  chapter: string;
+  volumeTitle: string;
+  arcTitle: string;
+  chapterTitle: string;
+  scrollY: number;
+  percent: number;
+  updatedAt: number;
+};
+
+export type ReaderProgressDraft = Omit<ReaderProgress, "updatedAt">;
+
 type ReaderState = {
   theme: ReaderTheme;
   fontSize: ReaderFontSize;
   lineHeight: ReaderLineHeight;
   bookmarks: ReaderBookmark[];
+  readingProgress: ReaderProgress | null;
   setTheme: (theme: ReaderTheme) => void;
   toggleTheme: () => void;
   setFontSize: (fontSize: ReaderFontSize) => void;
   setLineHeight: (lineHeight: ReaderLineHeight) => void;
+  updateReadingProgress: (progress: ReaderProgressDraft) => void;
+  clearReadingProgress: () => void;
   addBookmark: (bookmark: ReaderBookmarkDraft) => string;
   updateBookmark: (
     id: string,
@@ -58,20 +75,41 @@ function createBookmarkId() {
   return `bookmark-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeTheme(theme: unknown): ReaderTheme {
+  if (theme === "night" || theme === "dark") return "night";
+  if (theme === "mint") return "mint";
+  return "paper";
+}
+
 export const useReaderStore = create<ReaderState>()(
   persist(
     (set) => ({
-      theme: "light",
+      theme: "paper",
       fontSize: "medium",
       lineHeight: "normal",
       bookmarks: [],
+      readingProgress: null,
       setTheme: (theme) => set({ theme }),
       toggleTheme: () =>
         set((state) => ({
-          theme: state.theme === "light" ? "dark" : "light",
+          theme:
+            state.theme === "paper"
+              ? "night"
+              : state.theme === "night"
+                ? "mint"
+                : "paper",
         })),
       setFontSize: (fontSize) => set({ fontSize }),
       setLineHeight: (lineHeight) => set({ lineHeight }),
+      updateReadingProgress: (progress) => {
+        set({
+          readingProgress: {
+            ...progress,
+            updatedAt: Date.now(),
+          },
+        });
+      },
+      clearReadingProgress: () => set({ readingProgress: null }),
       addBookmark: (bookmark) => {
         const now = Date.now();
         const id = createBookmarkId();
@@ -111,6 +149,15 @@ export const useReaderStore = create<ReaderState>()(
     }),
     {
       name: "onepage-reader-preferences",
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<ReaderState> | undefined;
+
+        return {
+          ...currentState,
+          ...persisted,
+          theme: normalizeTheme(persisted?.theme),
+        };
+      },
     },
   ),
 );
