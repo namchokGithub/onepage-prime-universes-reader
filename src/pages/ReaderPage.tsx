@@ -2,6 +2,8 @@ import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import MDEditor from "@uiw/react-md-editor";
 import "@uiw/react-markdown-preview/markdown.css";
 import {
+  ArrowLeft,
+  ArrowRight,
   Bookmark,
   Moon,
   Pencil,
@@ -73,6 +75,15 @@ const fontSizeOptions: ReaderFontSize[] = [
   "xx-large",
   "xxx-large",
 ];
+
+type ReaderChapterNavTarget = {
+  vol: string;
+  arc: string;
+  chapter: string;
+  volumeTitle: string;
+  arcTitle: string;
+  chapterTitle: string;
+};
 
 type BookmarkNavigationState = {
   bookmarkScrollY?: number;
@@ -259,6 +270,35 @@ export function ReaderPage() {
   }, [location.state]);
   const readerHeader = useMemo(() => {
     return getChapterHeader(catalog, vol, arc, chapter);
+  }, [arc, catalog, chapter, vol]);
+  const chapterNavigation = useMemo(() => {
+    const chapters: ReaderChapterNavTarget[] = catalog.volumes.flatMap(
+      (volume) =>
+        volume.arcs.flatMap((catalogArc) =>
+          catalogArc.chapters.map((catalogChapter) => ({
+            vol: catalogChapter.vol,
+            arc: catalogChapter.arc,
+            chapter: catalogChapter.chapter,
+            volumeTitle: volume.title,
+            arcTitle: catalogArc.title,
+            chapterTitle: catalogChapter.title,
+          })),
+        ),
+    );
+    const currentIndex = chapters.findIndex(
+      (catalogChapter) =>
+        catalogChapter.vol === vol &&
+        catalogChapter.arc === arc &&
+        catalogChapter.chapter === chapter,
+    );
+
+    return {
+      previous: currentIndex > 0 ? chapters[currentIndex - 1] : null,
+      next:
+        currentIndex >= 0 && currentIndex < chapters.length - 1
+          ? chapters[currentIndex + 1]
+          : null,
+    };
   }, [arc, catalog, chapter, vol]);
   const chapterBookmarks = useMemo(
     () =>
@@ -450,6 +490,28 @@ export function ReaderPage() {
     navigate(path, { state: { bookmarkScrollY: bookmark.scrollY } });
   };
 
+  const navigateToChapterStart = (target: ReaderChapterNavTarget) => {
+    const nextScrollKey = readerScrollKey(target.vol, target.arc, target.chapter);
+
+    // Chapter navigation should always open the destination from the top,
+    // independent of any previous auto-resume position for that chapter.
+    localStorage.setItem(nextScrollKey, "0");
+    setReadingPercent(0);
+    saveReadingProgress({
+      vol: target.vol,
+      arc: target.arc,
+      chapter: target.chapter,
+      volumeTitle: target.volumeTitle,
+      arcTitle: target.arcTitle,
+      chapterTitle: target.chapterTitle,
+      scrollY: 0,
+      percent: 0,
+    });
+    navigate(`/read/${target.vol}/${target.arc}/${target.chapter}`, {
+      state: { bookmarkScrollY: 0 },
+    });
+  };
+
   return (
     <section className="w-full max-w-none animate-in fade-in duration-300">
       <div
@@ -515,6 +577,68 @@ export function ReaderPage() {
           }}
         />
       </article>
+
+      <nav
+        className="mt-10 rounded-md border bg-card p-4 text-card-foreground"
+        aria-label="Chapter navigation">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-stretch">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-auto min-h-14 justify-start gap-3 px-4 py-3 text-left"
+            onClick={() =>
+              chapterNavigation.previous
+                ? navigateToChapterStart(chapterNavigation.previous)
+                : undefined
+            }
+            disabled={!chapterNavigation.previous}>
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-xs text-muted-foreground">
+                Previous
+              </span>
+              <span className="block truncate">
+                {chapterNavigation.previous?.chapterTitle ?? "First chapter"}
+              </span>
+            </span>
+          </Button>
+
+          <div className="hidden min-w-0 items-center justify-center px-2 text-center sm:flex">
+            <div className="max-w-44">
+              <p className="truncate text-xs text-muted-foreground">
+                {readerHeader.arcTitle}
+              </p>
+              <p className="truncate text-sm font-medium">
+                {readerHeader.chapterTitle}
+              </p>
+            </div>
+          </div>
+
+          {chapterNavigation.next ? (
+            <Button
+              type="button"
+              className="h-auto min-h-14 justify-end gap-3 px-4 py-3 text-right"
+              onClick={() => navigateToChapterStart(chapterNavigation.next!)}>
+              <span className="min-w-0">
+                <span className="block text-xs opacity-80">Next</span>
+                <span className="block truncate">
+                  {chapterNavigation.next.chapterTitle}
+                </span>
+              </span>
+              <ArrowRight className="h-4 w-4 shrink-0" />
+            </Button>
+          ) : (
+            <div className="flex min-h-14 items-center justify-end rounded-md border bg-muted px-4 py-3 text-right text-sm">
+              <span>
+                <span className="block text-xs text-muted-foreground">
+                  Completed
+                </span>
+                <span className="font-medium">End of story</span>
+              </span>
+            </div>
+          )}
+        </div>
+      </nav>
 
       {isBookmarkPanelOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:px-4">
