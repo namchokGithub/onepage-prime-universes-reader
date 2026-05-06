@@ -1110,10 +1110,12 @@ export function AppLayout({
               size="icon"
               onClick={toggleTheme}
               aria-label="Toggle theme">
-              {theme === "dark" ? (
-                <Sun className="h-4 w-4" />
-              ) : (
+              {theme === "night" ? (
                 <Moon className="h-4 w-4" />
+              ) : theme === "mint" ? (
+                <Sun className="h-4 w-4 text-emerald-600" />
+              ) : (
+                <Sun className="h-4 w-4" />
               )}
             </Button>
           </nav>

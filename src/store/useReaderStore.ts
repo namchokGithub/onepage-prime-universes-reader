@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type ReaderTheme = "light" | "dark";
+export type ReaderTheme = "paper" | "night" | "mint";
 export type ReaderFontSize =
   | "small"
   | "medium"
@@ -75,10 +75,16 @@ function createBookmarkId() {
   return `bookmark-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeTheme(theme: unknown): ReaderTheme {
+  if (theme === "night" || theme === "dark") return "night";
+  if (theme === "mint") return "mint";
+  return "paper";
+}
+
 export const useReaderStore = create<ReaderState>()(
   persist(
     (set) => ({
-      theme: "light",
+      theme: "paper",
       fontSize: "medium",
       lineHeight: "normal",
       bookmarks: [],
@@ -86,7 +92,12 @@ export const useReaderStore = create<ReaderState>()(
       setTheme: (theme) => set({ theme }),
       toggleTheme: () =>
         set((state) => ({
-          theme: state.theme === "light" ? "dark" : "light",
+          theme:
+            state.theme === "paper"
+              ? "night"
+              : state.theme === "night"
+                ? "mint"
+                : "paper",
         })),
       setFontSize: (fontSize) => set({ fontSize }),
       setLineHeight: (lineHeight) => set({ lineHeight }),
@@ -138,6 +149,15 @@ export const useReaderStore = create<ReaderState>()(
     }),
     {
       name: "onepage-reader-preferences",
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<ReaderState> | undefined;
+
+        return {
+          ...currentState,
+          ...persisted,
+          theme: normalizeTheme(persisted?.theme),
+        };
+      },
     },
   ),
 );

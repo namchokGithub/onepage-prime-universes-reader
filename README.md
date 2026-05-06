@@ -81,7 +81,7 @@ npm run build
 - [x] Continue reading
 - [ ] ~~Search (in novel) ค้นคำในทั้งเรื่อง (client-side index)~~
 - [x] Chapter navigation UX
-- [ ] Theme presets
+- [x] Theme presets
 
 ---
 

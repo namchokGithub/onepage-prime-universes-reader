@@ -29,6 +29,7 @@ import {
   ReaderBookmark,
   ReaderFontSize,
   ReaderLineHeight,
+  ReaderTheme,
   useReaderStore,
 } from "@/store/useReaderStore";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,16 @@ const fontSizeOptions: ReaderFontSize[] = [
   "x-large",
   "xx-large",
   "xxx-large",
+];
+
+const themeOptions: Array<{
+  value: ReaderTheme;
+  label: string;
+  icon: typeof Sun;
+}> = [
+  { value: "paper", label: "Paper", icon: Sun },
+  { value: "night", label: "Night", icon: Moon },
+  { value: "mint", label: "Mint", icon: Sun },
 ];
 
 type ReaderChapterNavTarget = {
@@ -123,10 +134,10 @@ function formatBookmarkDate(timestamp: number) {
 type ReaderPreferencesProps = {
   fontSize: ReaderFontSize;
   lineHeight: ReaderLineHeight;
-  theme: "light" | "dark";
+  theme: ReaderTheme;
   setFontSize: (fontSize: ReaderFontSize) => void;
   setLineHeight: (lineHeight: ReaderLineHeight) => void;
-  setTheme: (theme: "light" | "dark") => void;
+  setTheme: (theme: ReaderTheme) => void;
   onAddBookmark: () => void;
 };
 
@@ -180,25 +191,23 @@ function ReaderPreferences({
 
       <div className="grid gap-2">
         <Label>Theme</Label>
-        <div className="grid grid-cols-2 rounded-md border p-1">
-          <Button
-            type="button"
-            variant={theme === "light" ? "secondary" : "ghost"}
-            size="sm"
-            className="min-w-0 px-2"
-            onClick={() => setTheme("light")}>
-            <Sun className="h-4 w-4" />
-            Light
-          </Button>
-          <Button
-            type="button"
-            variant={theme === "dark" ? "secondary" : "ghost"}
-            size="sm"
-            className="min-w-0 px-2"
-            onClick={() => setTheme("dark")}>
-            <Moon className="h-4 w-4" />
-            Dark
-          </Button>
+        <div className="grid grid-cols-3 rounded-md border p-1">
+          {themeOptions.map((option) => {
+            const Icon = option.icon;
+
+            return (
+              <Button
+                key={option.value}
+                type="button"
+                variant={theme === option.value ? "secondary" : "ghost"}
+                size="sm"
+                className="min-w-0 px-2 text-xs sm:text-sm"
+                onClick={() => setTheme(option.value)}>
+                <Icon className="h-4 w-4" />
+                {option.label}
+              </Button>
+            );
+          })}
         </div>
       </div>
 
@@ -561,7 +570,7 @@ export function ReaderPage() {
 
       <article
         data-reader-article
-        data-color-mode={theme}
+        data-color-mode={theme === "night" ? "dark" : "light"}
         className={cn(
           "transition-all",
           fontSizeClass[fontSize],
