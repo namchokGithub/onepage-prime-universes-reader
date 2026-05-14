@@ -25,6 +25,7 @@ import {
   Sun,
   Trash2,
   X,
+  FolderInput,
 } from "lucide-react";
 import {
   NavLink,
@@ -34,6 +35,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useApplyTheme } from "@/hooks/useApplyTheme";
 import { getFirebaseAuth, isFirebaseConfigured } from "@/lib/firebase";
@@ -47,6 +49,7 @@ import {
   getFirstReaderPath,
   renameEntry as renameContentEntry,
   reorderEntry as reorderContentEntry,
+  moveEntry as moveContentEntry,
   ReorderDirection,
 } from "@/utils/contentRepository";
 import type { ReaderBookmark, ReaderProgress } from "@/store/useReaderStore";
@@ -55,6 +58,12 @@ type EditorNavigationGuard = {
   hasUnsavedChanges: boolean;
   save: () => Promise<boolean>;
 };
+
+type MoveDialog = {
+  type: "arc" | "chapter";
+  source: { vol: string; arc: string; chapter?: string };
+  label: string;
+} | null;
 
 type CreateEntryType = "volume" | "arc" | "chapter";
 
@@ -110,6 +119,7 @@ const PIN_ATTEMPTS_BEFORE_COOLDOWN = 3;
 const FIRST_PIN_COOLDOWN_MS = 3 * 60 * 1000;
 const NEXT_PIN_COOLDOWN_MS = 5 * 60 * 1000;
 const EDITOR_PIN_AUTH_MS = 24 * 60 * 60 * 1000;
+
 function getStoredEditorPinAuth() {
   try {
     const rawAuth = localStorage.getItem(EDITOR_PIN_AUTH_KEY);
@@ -201,7 +211,7 @@ function getDialogDescription(dialog: ManagementDialog) {
       return "Create a new volume folder with its first arc and Chapter 1.";
     }
 
-    return "Create a new arc folder inside the current volume with Chapter 1.";
+    return "Create a new arc folder inside the selected volume with Chapter 1.";
   }
 
   if (dialog.type === "rename") {
@@ -283,6 +293,7 @@ export function AppLayout({
   const [isManagementBusy, setIsManagementBusy] = useState(false);
   const [isArrangeDialogOpen, setIsArrangeDialogOpen] = useState(false);
   const [isReordering, setIsReordering] = useState(false);
+  const [moveDialog, setMoveDialog] = useState<MoveDialog>(null);
   const [isEditorUnlocked, setIsEditorUnlocked] = useState(
     getStoredEditorPinAuth,
   );
@@ -295,7 +306,7 @@ export function AppLayout({
   const [pinState, setPinState] = useState(getStoredEditorPinState);
   const [pinNow, setPinNow] = useState(Date.now());
   const [collapsedVolumeIds, setCollapsedVolumeIds] = useState<Set<string>>(
-    () => new Set(),
+    () => new Set(catalog.volumes.map((volume) => volume.id)),
   );
   const location = useLocation();
   const navigate = useNavigate();
@@ -316,6 +327,8 @@ export function AppLayout({
   const pinCooldownMs = Math.max(0, pinState.cooldownUntil - pinNow);
   const firstReaderPath = getFirstReaderPath(catalog);
   const firstEditorPath = getFirstEditorPath(catalog);
+  const latestVolume = catalog.volumes[catalog.volumes.length - 1];
+  const defaultCreateArcVolumeId = activeVol ?? latestVolume?.id;
   const currentVolume =
     catalog.volumes.find((volume) => volume.id === activeVol) ??
     catalog.volumes[0];
@@ -343,8 +356,7 @@ export function AppLayout({
   const continueReadingTarget = useMemo(() => {
     if (!readingProgress) return null;
 
-    const isCompleted =
-      readingProgress.percent >= COMPLETED_PROGRESS_PERCENT;
+    const isCompleted = readingProgress.percent >= COMPLETED_PROGRESS_PERCENT;
     if (!isCompleted) {
       return {
         ...readingProgress,
@@ -415,18 +427,6 @@ export function AppLayout({
 
     return () => window.clearInterval(interval);
   }, [pinCooldownMs, shouldLockEditor]);
-
-  useEffect(() => {
-    if (!activeVol) return;
-
-    setCollapsedVolumeIds((currentIds) => {
-      if (!currentIds.has(activeVol)) return currentIds;
-
-      const nextIds = new Set(currentIds);
-      nextIds.delete(activeVol);
-      return nextIds;
-    });
-  }, [activeVol]);
 
   const topNavClass = ({ isActive }: { isActive: boolean }) =>
     cn(
@@ -642,8 +642,7 @@ export function AppLayout({
         chapter: renamed.chapter || readingProgress.chapter,
         volumeTitle: type === "volume" ? title : readingProgress.volumeTitle,
         arcTitle: type === "arc" ? title : readingProgress.arcTitle,
-        chapterTitle:
-          type === "chapter" ? title : readingProgress.chapterTitle,
+        chapterTitle: type === "chapter" ? title : readingProgress.chapterTitle,
         scrollY: readingProgress.scrollY,
         percent: readingProgress.percent,
       });
@@ -683,7 +682,13 @@ export function AppLayout({
     setManagementDialog({
       type: "create",
       entryType: type,
-      context,
+      context:
+        type === "arc"
+          ? {
+              ...context,
+              vol: context.vol ?? defaultCreateArcVolumeId,
+            }
+          : context,
       title: type === "volume" ? "New Volume" : "New Arc",
       value: type === "volume" ? "New volume" : "New arc",
     });
@@ -906,6 +911,45 @@ export function AppLayout({
       showMessage("Unable to reorder", (error as Error).message);
     } finally {
       setIsReordering(false);
+    }
+  };
+
+  const handleMoveEntry = async (
+    type: "arc" | "chapter",
+    source: { vol: string; arc: string; chapter?: string },
+    target: { vol: string; arc?: string },
+  ) => {
+    if (editorNavigationGuard?.hasUnsavedChanges) {
+      const didSave = await editorNavigationGuard.save();
+
+      if (!didSave) {
+        showMessage(
+          "Unable to save",
+          "Save the current chapter before moving.",
+        );
+        return;
+      }
+    }
+
+    setIsReordering(true);
+    try {
+      const result = await moveContentEntry(catalog, type, source, target);
+      await refreshCatalog();
+
+      const affectsActiveContent =
+        activeVol === source.vol &&
+        activeArc === source.arc &&
+        (type === "arc" || activeChapter === source.chapter);
+
+      if (affectsActiveContent) {
+        const prefix = isEditorRoute ? "/editor" : "/read";
+        navigate(`${prefix}/${result.vol}/${result.arc}/${result.chapter}`);
+      }
+    } catch (error) {
+      showMessage("Unable to move", (error as Error).message);
+    } finally {
+      setIsReordering(false);
+      setMoveDialog(null);
     }
   };
 
@@ -1208,7 +1252,9 @@ export function AppLayout({
                         ) : null}
                         {continueReadingTarget.isCompleted
                           ? "Completed"
-                          : formatBookmarkPercent(continueReadingTarget.percent)}
+                          : formatBookmarkPercent(
+                              continueReadingTarget.percent,
+                            )}
                       </span>
                       <Button
                         type="button"
@@ -1665,9 +1711,7 @@ export function AppLayout({
             className="flex max-h-[100dvh] w-full flex-col rounded-t-md border bg-card text-card-foreground shadow-xl sm:max-h-[min(760px,calc(100vh-2rem))] sm:max-w-3xl sm:rounded-md">
             <div className="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-5">
               <div className="min-w-0">
-                <h2
-                  id="arrange-dialog-title"
-                  className="text-lg font-semibold">
+                <h2 id="arrange-dialog-title" className="text-lg font-semibold">
                   Arrange library
                 </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -1843,6 +1887,28 @@ export function AppLayout({
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8 text-muted-foreground"
+                                  onClick={() =>
+                                    setMoveDialog({
+                                      type: "arc",
+                                      source: {
+                                        vol: volume.id,
+                                        arc: arc.id,
+                                      },
+                                      label: arc.title,
+                                    })
+                                  }
+                                  disabled={
+                                    isReordering ||
+                                    catalog.volumes.length < 2
+                                  }
+                                  title="Move arc to another volume">
+                                  <FolderInput className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground"
                                   onClick={() => {
                                     setIsArrangeDialogOpen(false);
                                     requestRenameEntry("arc", {
@@ -1929,11 +1995,34 @@ export function AppLayout({
                                       }
                                       disabled={
                                         isReordering ||
-                                        chapterIndex ===
-                                          arc.chapters.length - 1
+                                        chapterIndex === arc.chapters.length - 1
                                       }
                                       title="Move chapter down">
                                       <ArrowDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-muted-foreground"
+                                      onClick={() =>
+                                        setMoveDialog({
+                                          type: "chapter",
+                                          source: {
+                                            vol: chapter.vol,
+                                            arc: chapter.arc,
+                                            chapter: chapter.chapter,
+                                          },
+                                          label: chapter.title,
+                                        })
+                                      }
+                                      disabled={
+                                        isReordering ||
+                                        catalog.volumes.flatMap((v) => v.arcs)
+                                          .length < 2
+                                      }
+                                      title="Move chapter to another arc">
+                                      <FolderInput className="h-3.5 w-3.5" />
                                     </Button>
                                     <Button
                                       type="button"
@@ -1992,6 +2081,133 @@ export function AppLayout({
                 disabled={isReordering}>
                 Done
               </Button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {moveDialog ? (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:px-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="move-dialog-title"
+            className="flex max-h-[70dvh] w-full flex-col rounded-t-md border bg-card text-card-foreground shadow-xl sm:max-h-[min(500px,calc(100vh-2rem))] sm:max-w-md sm:rounded-md">
+            <div className="flex items-start justify-between gap-4 border-b px-4 py-4 sm:px-5">
+              <div className="min-w-0">
+                <h2
+                  id="move-dialog-title"
+                  className="text-lg font-semibold">
+                  Move {moveDialog.type === "arc" ? "Arc" : "Chapter"}
+                </h2>
+                <p className="mt-1 truncate text-sm text-muted-foreground">
+                  {moveDialog.label}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => setMoveDialog(null)}
+                aria-label="Close move dialog">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              {moveDialog.type === "arc" ? (
+                catalog.volumes.filter(
+                  (v) => v.id !== moveDialog.source.vol,
+                ).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No other volumes available.
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {catalog.volumes
+                      .filter((v) => v.id !== moveDialog.source.vol)
+                      .map((vol) => (
+                        <button
+                          key={vol.id}
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-accent disabled:opacity-50"
+                          disabled={isReordering}
+                          onClick={() =>
+                            void handleMoveEntry(
+                              "arc",
+                              moveDialog.source,
+                              { vol: vol.id },
+                            )
+                          }>
+                          <span className="font-medium">{vol.title}</span>
+                          <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                            Move here
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                )
+              ) : (
+                catalog.volumes
+                  .map((vol) => ({
+                    vol,
+                    arcs: vol.arcs.filter(
+                      (a) =>
+                        !(
+                          a.id === moveDialog.source.arc &&
+                          vol.id === moveDialog.source.vol
+                        ),
+                    ),
+                  }))
+                  .filter((g) => g.arcs.length > 0).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No other arcs available.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {catalog.volumes
+                      .map((vol) => ({
+                        vol,
+                        arcs: vol.arcs.filter(
+                          (a) =>
+                            !(
+                              a.id === moveDialog.source.arc &&
+                              vol.id === moveDialog.source.vol
+                            ),
+                        ),
+                      }))
+                      .filter((g) => g.arcs.length > 0)
+                      .map(({ vol, arcs }) => (
+                        <div key={vol.id}>
+                          <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {vol.title}
+                          </p>
+                          <div className="space-y-1">
+                            {arcs.map((arc) => (
+                              <button
+                                key={arc.id}
+                                type="button"
+                                className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-accent disabled:opacity-50"
+                                disabled={isReordering}
+                                onClick={() =>
+                                  void handleMoveEntry(
+                                    "chapter",
+                                    moveDialog.source,
+                                    { vol: vol.id, arc: arc.id },
+                                  )
+                                }>
+                                <span>{arc.title}</span>
+                                <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                                  Move here
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )
+              )}
             </div>
           </section>
         </div>
@@ -2059,23 +2275,50 @@ export function AppLayout({
                     ) : null}
                   </div>
                 ) : (
-                  <label className="mt-4 block text-sm">
-                    <span className="font-medium">
-                      {managementDialog.type === "create"
-                        ? "Title"
-                        : "New name"}
-                    </span>
-                    <input
-                      value={managementDialog.value}
-                      onChange={(event) =>
-                        setManagementDialog({
-                          ...managementDialog,
-                          value: event.target.value,
-                        })
-                      }
-                      className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
-                      autoFocus
-                    />
+                  <div className="mt-4 space-y-4">
+                    {managementDialog.type === "create" &&
+                    managementDialog.entryType === "arc" ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="new-arc-volume">Volume</Label>
+                        <select
+                          id="new-arc-volume"
+                          value={managementDialog.context.vol ?? ""}
+                          onChange={(event) =>
+                            setManagementDialog({
+                              ...managementDialog,
+                              context: {
+                                ...managementDialog.context,
+                                vol: event.target.value,
+                              },
+                            })
+                          }
+                          className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring">
+                          {catalog.volumes.map((volume) => (
+                            <option key={volume.id} value={volume.id}>
+                              {volume.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                    <label className="block text-sm">
+                      <span className="font-medium">
+                        {managementDialog.type === "create"
+                          ? "Title"
+                          : "New name"}
+                      </span>
+                      <input
+                        value={managementDialog.value}
+                        onChange={(event) =>
+                          setManagementDialog({
+                            ...managementDialog,
+                            value: event.target.value,
+                          })
+                        }
+                        className="mt-2 h-10 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                        autoFocus
+                      />
+                    </label>
                     <div className="mt-3 space-y-1 text-xs">
                       {getDialogGuide(managementDialog).map((guide) => (
                         <p
@@ -2090,7 +2333,7 @@ export function AppLayout({
                         </p>
                       ) : null}
                     </div>
-                  </label>
+                  </div>
                 )}
               </div>
             </div>

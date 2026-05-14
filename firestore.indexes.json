@@ -1,0 +1,37 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "chapters",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "volId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "arcOrder",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "chapters",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "volId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "arcId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "chapterOrder",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

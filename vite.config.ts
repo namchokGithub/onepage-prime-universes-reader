@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/onepage-prime-universes-reader/",
+  base: "/page-prime-universes-reader/",
   plugins: [react()],
   resolve: {
     alias: {

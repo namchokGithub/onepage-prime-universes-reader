@@ -914,3 +914,147 @@ export async function reorderEntry(
   await batch.commit();
   return true;
 }
+
+export async function moveEntry(
+  catalog: Catalog,
+  type: "arc" | "chapter",
+  source: { vol: string; arc: string; chapter?: string },
+  target: { vol: string; arc?: string },
+): Promise<{ vol: string; arc: string; chapter: string }> {
+  const db = getFirebaseDb();
+
+  if (type === "chapter") {
+    if (!source.chapter || !target.arc) {
+      throw new Error("Missing chapter or target arc");
+    }
+
+    const sourceRef = chapterReference(source.vol, source.arc, source.chapter);
+    const snapshot = await getDoc(sourceRef);
+    if (!snapshot.exists()) throw new Error("Chapter not found");
+
+    const current = normalizeChapterDocument(
+      snapshot.data() as Partial<ChapterDocument>,
+    );
+
+    // Read target arc docs and compute the max locally to avoid requiring
+    // an extra composite index for move operations.
+    const targetArcSnapshot = await getDocs(
+      query(
+        collection(db, CHAPTERS_COLLECTION),
+        where("volId", "==", target.vol),
+        where("arcId", "==", target.arc),
+      ),
+    );
+    const maxChapterOrder = targetArcSnapshot.docs.reduce((maxOrder, doc) => {
+      const currentOrder = Number(
+        (doc.data() as Partial<ChapterDocument>).chapterOrder ?? 0,
+      );
+      return Math.max(maxOrder, currentOrder);
+    }, 0);
+    const newChapterOrder = maxChapterOrder + 1;
+
+    const targetVolume = catalog.volumes.find((v) => v.id === target.vol);
+    const targetArc = targetVolume?.arcs.find((a) => a.id === target.arc);
+    const targetVolTitle =
+      targetVolume?.title ?? titleFromSegment(target.vol, "Volume");
+    const targetArcTitle =
+      targetArc?.title ?? titleFromSegment(target.arc, "Arc");
+
+    const batch = writeBatch(db);
+    batch.set(
+      doc(
+        db,
+        CHAPTERS_COLLECTION,
+        documentId(target.vol, target.arc, source.chapter),
+      ),
+      {
+        ...current,
+        volId: target.vol,
+        volTitle: targetVolTitle,
+        volOrder: parseOrder(target.vol, "vol"),
+        arcId: target.arc,
+        arcTitle: targetArcTitle,
+        arcOrder: parseOrder(target.arc, "arc"),
+        chapterOrder: newChapterOrder,
+        updatedAt: serverTimestamp(),
+      },
+    );
+    await copyChapterBackups(
+      batch,
+      { vol: source.vol, arc: source.arc, chapter: source.chapter },
+      { vol: target.vol, arc: target.arc, chapter: source.chapter },
+    );
+    batch.delete(sourceRef);
+    await batch.commit();
+
+    return { vol: target.vol, arc: target.arc, chapter: source.chapter };
+  }
+
+  // type === "arc": move all chapters in source arc to target volume
+  const targetVolume = catalog.volumes.find((v) => v.id === target.vol);
+
+  // Read target volume docs and compute the max locally to avoid requiring
+  // an extra composite index for move operations.
+  const targetVolSnapshot = await getDocs(
+    query(
+      collection(db, CHAPTERS_COLLECTION),
+      where("volId", "==", target.vol),
+    ),
+  );
+  const maxArcOrder = targetVolSnapshot.docs.reduce((maxOrder, doc) => {
+    const currentOrder = Number(
+      (doc.data() as Partial<ChapterDocument>).arcOrder ?? 0,
+    );
+    return Math.max(maxOrder, currentOrder);
+  }, 0);
+  const newArcOrder = maxArcOrder + 1;
+
+  const targetVolTitle =
+    targetVolume?.title ?? titleFromSegment(target.vol, "Volume");
+  const targetVolOrder = parseOrder(target.vol, "vol");
+
+  const arcSnapshot = await getDocs(
+    query(
+      collection(db, CHAPTERS_COLLECTION),
+      where("volId", "==", source.vol),
+      where("arcId", "==", source.arc),
+    ),
+  );
+
+  if (arcSnapshot.empty) throw new Error("Arc has no chapters");
+
+  const batch = writeBatch(db);
+  for (const chapterSnapshot of arcSnapshot.docs) {
+    const current = normalizeChapterDocument(
+      chapterSnapshot.data() as Partial<ChapterDocument>,
+    );
+    batch.set(
+      doc(
+        db,
+        CHAPTERS_COLLECTION,
+        documentId(target.vol, source.arc, current.chapterId),
+      ),
+      {
+        ...current,
+        volId: target.vol,
+        volTitle: targetVolTitle,
+        volOrder: targetVolOrder,
+        arcOrder: newArcOrder,
+        updatedAt: serverTimestamp(),
+      },
+    );
+    await copyChapterBackups(
+      batch,
+      { vol: source.vol, arc: source.arc, chapter: current.chapterId },
+      { vol: target.vol, arc: source.arc, chapter: current.chapterId },
+    );
+    batch.delete(chapterSnapshot.ref);
+  }
+  await batch.commit();
+
+  const firstChapterId = normalizeChapterDocument(
+    arcSnapshot.docs[0].data() as Partial<ChapterDocument>,
+  ).chapterId;
+
+  return { vol: target.vol, arc: source.arc, chapter: firstChapterId };
+}
